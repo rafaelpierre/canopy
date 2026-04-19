@@ -1,0 +1,49 @@
+# Electron build for RHEL 8 / CentOS 8 compatible systems
+# Uses Rocky 8 as base to link against older glibc (2.28)
+FROM rockylinux:8
+
+# Enable EPEL + PowerTools for extra packages
+RUN dnf -y install dnf-plugins-core epel-release && \
+    dnf config-manager --set-enabled powertools
+
+# Minimal build deps
+# GCC Toolset 12 provides gcc with C++20 support (needed by node-pty)
+RUN dnf -y install --allowerasing \
+    gcc gcc-c++ make \
+    gcc-toolset-12-gcc gcc-toolset-12-gcc-c++ \
+    python3 python3-pip \
+    curl wget \
+    rpm-build \
+    ca-certificates \
+    && dnf clean all
+
+# Install uv via standalone installer, then use it to get a modern Python
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+RUN uv python install 3.12
+
+# Enable GCC 12 by default for C++20 support
+ENV PATH="/opt/rh/gcc-toolset-12/root/usr/bin:${PATH}" \
+    CC="/opt/rh/gcc-toolset-12/root/usr/bin/gcc" \
+    CXX="/opt/rh/gcc-toolset-12/root/usr/bin/g++"
+
+# Install Node.js 20
+RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
+    && dnf -y install nodejs \
+    && dnf clean all
+
+WORKDIR /app
+
+# Copy project
+COPY . .
+
+# Install npm dependencies (--ignore-scripts to skip rebuild, then rebuild manually)
+RUN npm ci --ignore-scripts || npm install --ignore-scripts
+
+# Bundle LSP wheels for Linux x86_64
+RUN ./scripts/bundle-lsp.sh linux $(uname -m)
+
+# Build the Electron app — rpm for RHEL, deb as bonus
+RUN npx vite build && npx electron-builder --linux rpm deb
+
+# Output is in dist-electron/

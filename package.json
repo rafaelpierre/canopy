@@ -1,0 +1,103 @@
+{
+  "name": "canopy",
+  "version": "0.2.0",
+  "description": "A lightweight Python IDE",
+  "author": {
+    "name": "Rafael Pierre",
+    "email": "rafaelpierre@github.com"
+  },
+  "homepage": "https://github.com/rafaelpierre/canopy",
+  "type": "module",
+  "main": "app/main.cjs",
+  "scripts": {
+    "dev": "vite dev",
+    "dev:electron": "concurrently \"vite dev\" \"wait-on http://localhost:1420 && ELECTRON_RUN_AS_NODE= electron .\"",
+    "build": "npm run check && vite build",
+    "predist": "node scripts/patch-pty-pkg.cjs",
+    "build:electron": "npm run predist && vite build && electron-builder",
+    "build:linux": "npm run predist && vite build && electron-builder --linux",
+    "build:mac": "npm run predist && vite build && electron-builder --mac",
+    "build:win": "npm run predist && vite build && electron-builder --win",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "postinstall": "electron-rebuild -f -w node-pty-prebuilt-multiarch && npm dedupe --quiet"
+  },
+  "license": "MIT",
+  "overrides": {
+    "cookie": "^0.7.2"
+  },
+  "dependencies": {
+    "node-pty-prebuilt-multiarch": "^0.10.0"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.57.1",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
+    "lucide-svelte": "^1.0.1",
+    "monaco-editor": "^0.53.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3",
+    "vite-plugin-monaco-editor": "^1.1.0",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "com.rafaelpierre.canopy",
+    "productName": "Canopy",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/node-pty-prebuilt-multiarch/**"
+    ],
+    "files": [
+      "build/**/*",
+      "app/**/*",
+      "!build/**/*.map",
+      "!app/**/*.map",
+      "!node_modules/**/{test,tests,__tests__}/**",
+      "!node_modules/**/{CHANGELOG,README,readme,changelog}*",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/**/{.github,.eslintrc,tsconfig}*",
+      "!node_modules/prebuild-install/**",
+      "!node_modules/nan/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/lsp-wheels",
+        "to": "lsp-wheels",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "rpm",
+        "deb"
+      ],
+      "category": "Development"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "electronLanguages": ["en"]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}
