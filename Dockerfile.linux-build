@@ -1,5 +1,8 @@
-# Electron build for Linux (Ubuntu-based) — produces deb + AppImage + rpm
+# Electron build for Linux (Ubuntu 22.04)
+# Build args:
+#   TARGETARCH — set automatically by `docker build --platform linux/amd64|arm64`
 FROM ubuntu:22.04
+ARG TARGETARCH=amd64
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -7,9 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    python3 python3-pip \
+    python3 \
     ca-certificates \
-    rpm \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20
@@ -17,18 +19,23 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# node-gyp reads $PYTHON; ubuntu's python3 is 3.10 which is fine
+ENV PYTHON=/usr/bin/python3
+
 WORKDIR /app
 
 # Copy project
 COPY . .
 
-# Install npm dependencies
-RUN npm ci --ignore-scripts || npm install --ignore-scripts
+# nan is a devDep of node-pty-prebuilt-multiarch so npm ci won't install it;
+# add it explicitly so node-gyp's `node -e "require('nan')"` check succeeds
+RUN npm ci --ignore-scripts || npm install --ignore-scripts && \
+    npm install --no-save nan
 
-# Bundle LSP wheels for Linux x86_64
-RUN ./scripts/bundle-lsp.sh linux x86_64
-
-# Build the Electron app
-RUN npx vite build && npx electron-builder --linux deb rpm
+# Build the Electron app and produce a plain unpacked directory, then tar it
+# Docker's TARGETARCH uses "amd64" but electron-builder unpacked dirs use "x64"
+RUN npx vite build && npx electron-builder --linux dir && \
+    EB_ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
+    tar -czf dist-electron/canopy-linux-${TARGETARCH}.tar.gz -C dist-electron linux-${EB_ARCH}-unpacked
 
 # Output is in dist-electron/

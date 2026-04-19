@@ -1,6 +1,9 @@
 # Electron build for RHEL 8 / CentOS 8 compatible systems
 # Uses Rocky 8 as base to link against older glibc (2.28)
+# Build args:
+#   TARGETARCH — set automatically by `docker build --platform linux/amd64|arm64`
 FROM rockylinux:8
+ARG TARGETARCH=arm64
 
 # Enable EPEL + PowerTools for extra packages
 RUN dnf -y install dnf-plugins-core epel-release && \
@@ -40,7 +43,9 @@ RUN npm ci --ignore-scripts || npm install --ignore-scripts && \
     npm install --no-save nan
 
 # Build the Electron app and produce a plain unpacked directory, then tar it
+# Docker's TARGETARCH uses "amd64" but electron-builder unpacked dirs use "x64"
 RUN npx vite build && npx electron-builder --linux dir && \
-    tar -czf dist-electron/canopy-linux-arm64.tar.gz -C dist-electron linux-arm64-unpacked
+    EB_ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
+    tar -czf dist-electron/canopy-linux-${TARGETARCH}.tar.gz -C dist-electron linux-${EB_ARCH}-unpacked
 
 # Output is in dist-electron/

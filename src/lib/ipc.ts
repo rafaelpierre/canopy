@@ -1,5 +1,4 @@
 // IPC abstraction layer — bridges Svelte frontend to Electron main process.
-// Replaces all @tauri-apps/* imports with a single module.
 
 const api = (window as any).electronAPI
 

@@ -341,7 +341,7 @@
   }
 
   /**
-   * Register the Tauri/Electron native menu:action IPC listener.
+   * Register the Electron native menu:action IPC listener.
    * Returns a single-element cleanup array containing the unlisten fn.
    */
   async function initSaveListeners(ipcMod: any, stores: any): Promise<Array<() => void>> {

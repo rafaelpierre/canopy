@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
-# Build Canopy for Linux using Docker/Podman.
-# Outputs: dist/linux/
+# Build Canopy for Linux (RHEL 8 compatible) using Docker/Podman.
+# Outputs: dist/linux/canopy-linux-<arch>.tar.gz
+#
+# Usage:
+#   ./scripts/build-linux-rhel8.sh              # arm64 (default)
+#   PLATFORM=linux/amd64 ./scripts/build-linux-rhel8.sh
 #
 set -euo pipefail
 
@@ -9,14 +13,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$PROJECT_DIR/dist/linux"
 
+PLATFORM="${PLATFORM:-linux/arm64}"
+ARCH="${PLATFORM##*/}"   # arm64 or amd64
+
 # Use podman if available, otherwise docker
 CMD="${CONTAINER_CMD:-$(command -v podman || command -v docker)}"
 
 cd "$PROJECT_DIR"
 
-echo "==> Building Linux release with $CMD..."
+echo "==> Building Linux release ($PLATFORM) with $CMD..."
 
 $CMD build \
+    --platform "$PLATFORM" \
+    --build-arg TARGETARCH="$ARCH" \
     -f Dockerfile.linux-build-rhel8 \
     -t canopy-linux-builder \
     .
@@ -26,7 +35,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # Create a temporary container and copy out the tarball
 CONTAINER_ID=$($CMD create canopy-linux-builder)
-$CMD cp "$CONTAINER_ID:/app/dist-electron/canopy-linux-arm64.tar.gz" "$OUTPUT_DIR/"
+$CMD cp "$CONTAINER_ID:/app/dist-electron/canopy-linux-${ARCH}.tar.gz" "$OUTPUT_DIR/"
 $CMD rm "$CONTAINER_ID" > /dev/null
 
 echo ""

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
-# Build Canopy for Linux x86_64 using Docker.
-# Outputs: dist/linux/
+# Build Canopy for Linux (Ubuntu) using Docker/Podman.
+# Outputs: dist/linux/canopy-linux-<arch>.tar.gz
+#
+# Usage:
+#   ./scripts/build-linux.sh              # amd64 (default)
+#   PLATFORM=linux/arm64 ./scripts/build-linux.sh
 #
 set -euo pipefail
 
@@ -9,12 +13,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$PROJECT_DIR/dist/linux"
 
+PLATFORM="${PLATFORM:-linux/amd64}"
+ARCH="${PLATFORM##*/}"   # arm64 or amd64
+
+# Use podman if available, otherwise docker
+CMD="${CONTAINER_CMD:-$(command -v podman || command -v docker)}"
+
 cd "$PROJECT_DIR"
 
-echo "==> Building Linux x86_64 release in Docker..."
+echo "==> Building Linux release ($PLATFORM) with $CMD..."
 
-docker build \
-    --platform linux/amd64 \
+$CMD build \
+    --platform "$PLATFORM" \
+    --build-arg TARGETARCH="$ARCH" \
     -f Dockerfile.linux-build \
     -t canopy-linux-builder \
     .
@@ -22,14 +33,11 @@ docker build \
 echo "==> Extracting build artifacts..."
 mkdir -p "$OUTPUT_DIR"
 
-# Create a temporary container and copy out the bundles
-CONTAINER_ID=$(docker create canopy-linux-builder)
-docker cp "$CONTAINER_ID:/app/src-tauri/target/release/bundle/deb" "$OUTPUT_DIR/" 2>/dev/null || true
-docker cp "$CONTAINER_ID:/app/src-tauri/target/release/bundle/rpm" "$OUTPUT_DIR/" 2>/dev/null || true
-docker cp "$CONTAINER_ID:/app/src-tauri/target/release/bundle/appimage" "$OUTPUT_DIR/" 2>/dev/null || true
-docker cp "$CONTAINER_ID:/app/src-tauri/target/release/canopy" "$OUTPUT_DIR/canopy" 2>/dev/null || true
-docker rm "$CONTAINER_ID" > /dev/null
+# Create a temporary container and copy out the tarball
+CONTAINER_ID=$($CMD create canopy-linux-builder)
+$CMD cp "$CONTAINER_ID:/app/dist-electron/canopy-linux-${ARCH}.tar.gz" "$OUTPUT_DIR/"
+$CMD rm "$CONTAINER_ID" > /dev/null
 
 echo ""
 echo "==> Done! Linux artifacts in: $OUTPUT_DIR"
-ls -lhR "$OUTPUT_DIR"
+ls -lh "$OUTPUT_DIR"
