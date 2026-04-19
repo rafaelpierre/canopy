@@ -27,6 +27,21 @@ It's opinionated by design. It won't try to sell you AI features, it won't repor
 
 ---
 
+## Features
+
+| | |
+|---|---|
+| Monaco Editor | Full IntelliSense-grade editing experience |
+| Dual LSP support | basedpyright or ty, switchable at runtime |
+| Integrated terminal | Full PTY, multiple tabs, your login shell |
+| Auto venv detection | Finds `.venv`, `venv`, `.env` automatically |
+| Native uv support | First-class environment manager integration |
+| Session restore | Remembers open tabs and active file per project |
+| File watcher | Detects external changes, prompts to reload |
+| Zero telemetry | No analytics, no crash reporters, no phone home |
+
+---
+
 ## What Canopy is
 
 ### Lightweight by default
@@ -72,21 +87,6 @@ Canopy doesn't bundle Copilot. It doesn't nudge you toward any AI assistant. If 
 
 ---
 
-## Features
-
-| | |
-|---|---|
-| Monaco Editor | Full IntelliSense-grade editing experience |
-| Dual LSP support | basedpyright or ty, switchable at runtime |
-| Integrated terminal | Full PTY, multiple tabs, your login shell |
-| Auto venv detection | Finds `.venv`, `venv`, `.env` automatically |
-| Native uv support | First-class environment manager integration |
-| Session restore | Remembers open tabs and active file per project |
-| File watcher | Detects external changes, prompts to reload |
-| Zero telemetry | No analytics, no crash reporters, no phone home |
-
----
-
 ## Installation
 
 Grab the latest release for your platform from the [Releases](../../releases) page.
@@ -118,4 +118,4 @@ Grab the latest release for your platform from the [Releases](../../releases) pa
 
 ## License
 
-MIT © [Rafael Pierre](https://github.com/rafaelpierre)
+PolyForm Perimeter 1.0.0 © [Rafael Pierre](https://github.com/rafaelpierre)
