@@ -8,42 +8,39 @@ RUN dnf -y install dnf-plugins-core epel-release && \
 
 # Minimal build deps
 # GCC Toolset 12 provides gcc with C++20 support (needed by node-pty)
+# python39 installed separately after nodejs to ensure it wins over python36 (nodejs dep)
 RUN dnf -y install --allowerasing \
     gcc gcc-c++ make \
     gcc-toolset-12-gcc gcc-toolset-12-gcc-c++ \
-    python3 python3-pip \
     curl wget \
-    rpm-build \
     ca-certificates \
     && dnf clean all
-
-# Install uv via standalone installer, then use it to get a modern Python
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:${PATH}"
-RUN uv python install 3.12
 
 # Enable GCC 12 by default for C++20 support
 ENV PATH="/opt/rh/gcc-toolset-12/root/usr/bin:${PATH}" \
     CC="/opt/rh/gcc-toolset-12/root/usr/bin/gcc" \
     CXX="/opt/rh/gcc-toolset-12/root/usr/bin/g++"
 
-# Install Node.js 20
+# Install Node.js 20, then python39 (node-gyp needs Python ≥3.8; Rocky 8's nodejs dep pulls python36)
 RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
-    && dnf -y install nodejs \
+    && dnf -y install nodejs python39 \
     && dnf clean all
+
+# node-gyp reads $PYTHON; npm config set python was removed in npm v8
+ENV PYTHON=/usr/bin/python3.9
 
 WORKDIR /app
 
 # Copy project
 COPY . .
 
-# Install npm dependencies (--ignore-scripts to skip rebuild, then rebuild manually)
-RUN npm ci --ignore-scripts || npm install --ignore-scripts
+# nan is a devDep of node-pty-prebuilt-multiarch so npm ci won't install it;
+# add it explicitly so node-gyp's `node -e "require('nan')"` check succeeds
+RUN npm ci --ignore-scripts || npm install --ignore-scripts && \
+    npm install --no-save nan
 
-# Bundle LSP wheels for Linux x86_64
-RUN ./scripts/bundle-lsp.sh linux $(uname -m)
-
-# Build the Electron app — rpm for RHEL, deb as bonus
-RUN npx vite build && npx electron-builder --linux rpm deb
+# Build the Electron app and produce a plain unpacked directory, then tar it
+RUN npx vite build && npx electron-builder --linux dir && \
+    tar -czf dist-electron/canopy-linux-arm64.tar.gz -C dist-electron linux-arm64-unpacked
 
 # Output is in dist-electron/

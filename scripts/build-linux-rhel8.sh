@@ -24,10 +24,9 @@ $CMD build \
 echo "==> Extracting build artifacts..."
 mkdir -p "$OUTPUT_DIR"
 
-# Create a temporary container and copy out the bundles
+# Create a temporary container and copy out the tarball
 CONTAINER_ID=$($CMD create canopy-linux-builder)
-$CMD cp "$CONTAINER_ID:/app/src-tauri/target/release/bundle/rpm" "$OUTPUT_DIR/" 2>/dev/null || true
-$CMD cp "$CONTAINER_ID:/app/src-tauri/target/release/canopy" "$OUTPUT_DIR/canopy" 2>/dev/null || true
+$CMD cp "$CONTAINER_ID:/app/dist-electron/canopy-linux-arm64.tar.gz" "$OUTPUT_DIR/"
 $CMD rm "$CONTAINER_ID" > /dev/null
 
 echo ""
