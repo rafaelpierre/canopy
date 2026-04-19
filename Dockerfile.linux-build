@@ -35,7 +35,7 @@ RUN npm ci --ignore-scripts || npm install --ignore-scripts && \
 # Build the Electron app and produce a plain unpacked directory, then tar it
 # Docker's TARGETARCH uses "amd64" but electron-builder unpacked dirs use "x64"
 RUN npx vite build && npx electron-builder --linux dir && \
-    EB_ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
-    tar -czf dist-electron/canopy-linux-${TARGETARCH}.tar.gz -C dist-electron linux-${EB_ARCH}-unpacked
+    EB_DIR=$([ "$TARGETARCH" = "amd64" ] && echo "linux-unpacked" || echo "linux-${TARGETARCH}-unpacked") && \
+    tar -czf dist-electron/canopy-linux-${TARGETARCH}.tar.gz -C dist-electron "$EB_DIR"
 
 # Output is in dist-electron/
