@@ -74,7 +74,7 @@ Dark mode. Clean layout. The interface has a file tree, an editor, a terminal, a
 
 Canopy auto-detects [uv](https://github.com/astral-sh/uv) and integrates it natively for environment and dependency management - no configuration needed. For type checking, you can choose between [basedpyright](https://github.com/DetachHead/basedpyright) (battle-tested) and [ty](https://github.com/astral-sh/ty) (Astral's blazing-fast new type checker, which also exposes an LSP server). Switch between them in one click. Both are supported as first-class LSP adapters with full semantic highlighting, diagnostics, hover types, completions, and go-to-definition.
 
-### 🦾 AI your way — or not at all
+### 🦾 AI your way - or not at all
 
 One of my main gripes with VSCode came after I found out about the amount of bloat it includes in the system instructions for both Copilot and Claude Code. For this reason, Canopy doesn't bundle Copilot or any other AI features, nor does it nudge you toward any AI assistant. If you want AI help, you already know where to find it: open the built-in terminal and run [Claude Code](https://claude.ai/code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [OpenCode](https://github.com/sst/opencode), or whatever you prefer. Your editor and your AI workflow stay decoupled — the way they should be.
 
