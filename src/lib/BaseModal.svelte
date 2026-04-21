@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import { tick } from 'svelte'
 
   interface Props {
     open:     boolean
@@ -8,20 +9,58 @@
     children: Snippet
   }
   let { open, onClose, width = '460px', children }: Props = $props()
+
+  let boxEl: HTMLElement | undefined = $state(undefined)
+  let previousFocus: HTMLElement | null = null
+
+  const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+
+  $effect(() => {
+    if (open) {
+      previousFocus = document.activeElement as HTMLElement | null
+      tick().then(() => {
+        const first = boxEl?.querySelector<HTMLElement>(FOCUSABLE)
+        ;(first ?? boxEl)?.focus()
+      })
+    } else {
+      previousFocus?.focus()
+      previousFocus = null
+    }
+  })
+
+  function trapFocus(e: KeyboardEvent) {
+    if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
+    if (e.key !== 'Tab' || !boxEl) return
+    const focusable = Array.from(boxEl.querySelectorAll<HTMLElement>(FOCUSABLE))
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last  = focusable[focusable.length - 1]
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus() }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+  }
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
     class="bm-backdrop"
-    role="dialog"
-    aria-modal="true"
-    tabindex="-1"
+    role="presentation"
     onclick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    onkeydown={(e) => { if (e.key === 'Escape') { e.preventDefault(); onClose() } }}
   >
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="bm-box" style="width:{width}" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="bm-box"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      style="width:{width}"
+      bind:this={boxEl}
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={trapFocus}
+    >
       {@render children()}
     </div>
   </div>
@@ -47,6 +86,8 @@
     overflow: hidden;
     animation: bm-in 0.12s ease-out;
   }
+
+  .bm-box:focus { outline: none; }
 
   @keyframes bm-fade {
     from { opacity: 0 }

@@ -32,12 +32,21 @@ export const basedpyrightAdapter: LspAdapter = {
       python: {
         pythonPath,
         venvPath: rootPath,
+        analysis: {
+          extraPaths:       [rootPath],
+          autoSearchPaths:  true,
+          indexing:         true,
+          useLibraryCodeForTypes: true,
+        },
       },
       basedpyright: {
         analysis: {
           typeCheckingMode:       'standard',
           diagnosticMode:         'openFilesOnly',
           autoImportCompletions:  true,
+          autoSearchPaths:        true,
+          indexing:               true,
+          extraPaths:             [rootPath],
           exclude:                EXCLUDE_PATTERNS,
         },
       },
@@ -51,12 +60,22 @@ export const basedpyrightAdapter: LspAdapter = {
           typeCheckingMode:      'standard',
           diagnosticMode:        'openFilesOnly',
           autoImportCompletions: true,
+          autoSearchPaths:       true,
+          indexing:              true,
+          extraPaths:            [rootPath],
         },
       },
       python: {
         pythonPath,
         venvPath: rootPath,
-        analysis: { typeCheckingMode: 'standard', exclude: EXCLUDE_PATTERNS },
+        analysis: {
+          typeCheckingMode:       'standard',
+          autoSearchPaths:        true,
+          indexing:               true,
+          useLibraryCodeForTypes: true,
+          extraPaths:             [rootPath],
+          exclude:                EXCLUDE_PATTERNS,
+        },
       },
     }
   },
@@ -68,10 +87,13 @@ export const basedpyrightAdapter: LspAdapter = {
           typeCheckingMode:           'standard',
           diagnosticMode:             'openFilesOnly',
           autoImportCompletions:      true,
+          autoSearchPaths:            true,
+          indexing:                   true,
           reportMissingImports:       true,
           reportMissingModuleSource:  true,
           reportUnusedImport:         'warning',
           reportUnusedVariable:       'warning',
+          extraPaths:                 [rootPath],
           exclude:                    EXCLUDE_PATTERNS,
         },
       }
@@ -81,10 +103,14 @@ export const basedpyrightAdapter: LspAdapter = {
         typeCheckingMode:           'standard',
         diagnosticMode:             'openFilesOnly',
         autoImportCompletions:      true,
+        autoSearchPaths:            true,
+        indexing:                   true,
+        useLibraryCodeForTypes:     true,
         reportMissingImports:       true,
         reportMissingModuleSource:  true,
         reportUnusedImport:         'warning',
         reportUnusedVariable:       'warning',
+        extraPaths:                 [rootPath],
         exclude:                    EXCLUDE_PATTERNS,
       }
     }
@@ -92,7 +118,14 @@ export const basedpyrightAdapter: LspAdapter = {
       return {
         pythonPath,
         venvPath: rootPath,
-        analysis: { typeCheckingMode: 'standard', exclude: EXCLUDE_PATTERNS },
+        analysis: {
+          typeCheckingMode:       'standard',
+          autoSearchPaths:        true,
+          indexing:               true,
+          useLibraryCodeForTypes: true,
+          extraPaths:             [rootPath],
+          exclude:                EXCLUDE_PATTERNS,
+        },
       }
     }
     return {}

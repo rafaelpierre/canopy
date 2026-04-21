@@ -29,6 +29,9 @@
   let pathToUri: any
   let stores: any
 
+  // Python sys.path entries cached for import-path completion
+  let pythonSearchPaths: string[] = []
+
   // Track semantic token legend from server
   let serverTokenTypes: string[] = []
   let serverTokenModifiers: string[] = []
@@ -492,28 +495,145 @@
 
     // Register completion provider — trigger on common Python typing patterns
     monaco.languages.registerCompletionItemProvider('python', {
-      triggerCharacters: ['.', '(', '[', ',', ' ', ':', '"', "'", '@', '/'],
+      triggerCharacters: ['.', '(', '[', ',', ':', '"', "'", '@'],
       provideCompletionItems: async (model: any, position: any, context: any) => {
         if (!lspClient?.isReady() || !currentPath) return { suggestions: [] }
         const lspPos = monacoToLsp(position)
         try {
-          const triggerKind = context?.triggerKind ?? 1
+          // Monaco triggerKind is 0-indexed; LSP is 1-indexed (Invoked=1, TriggerCharacter=2)
+          const triggerKind = (context?.triggerKind ?? 0) + 1
           const triggerChar = context?.triggerCharacter
           const result = await lspClient.completion(currentPath, lspPos, triggerKind, triggerChar)
-          const items = result?.items ?? result ?? []
+          const items: any[] = result?.items ?? (Array.isArray(result) ? result : [])
+          const incomplete: boolean = result?.isIncomplete ?? false
+          // Hide dunder names (__all__, __doc__, etc.) — visible only when user types __ explicitly
+          const filtered = triggerChar === '.'
+            ? items.filter((item: any) => !item.label.startsWith('__'))
+            : items
           return {
-            suggestions: items.slice(0, 200).map((item: any) => ({
-              label: item.label,
-              kind: item.kind ?? 1,
-              detail: item.detail,
-              documentation: typeof item.documentation === 'string'
-                ? item.documentation
-                : item.documentation?.value,
-              insertText: item.insertText ?? item.label,
-              range: undefined,
-            })),
+            incomplete,
+            suggestions: filtered.slice(0, 200).map((item: any) => {
+              const edit = item.textEdit
+              const insertText = edit?.newText ?? item.insertText ?? item.label
+              const range = edit?.range
+                ? {
+                    startLineNumber: edit.range.start.line + 1,
+                    startColumn:     edit.range.start.character + 1,
+                    endLineNumber:   edit.range.end.line + 1,
+                    endColumn:       edit.range.end.character + 1,
+                  }
+                : undefined
+              return {
+                label: item.label,
+                kind: item.kind ?? 1,
+                detail: item.detail,
+                documentation: typeof item.documentation === 'string'
+                  ? item.documentation
+                  : item.documentation?.value,
+                insertText,
+                range,
+              }
+            }),
           }
         } catch { return { suggestions: [] } }
+      },
+    })
+
+    // Supplementary import-path completion: enumerate submodule names from the filesystem.
+    // LSPs return symbols inside a module but not submodule names. This provider covers two
+    // patterns:
+    //   Pattern 1 (dot trigger): `from X.Y.` / `import X.Y.` → list contents of Y/
+    //   Pattern 2 (invoke):      `from X import partial`       → list contents of X/
+    monaco.languages.registerCompletionItemProvider('python', {
+      triggerCharacters: ['.'],
+      provideCompletionItems: async (model: any, position: any, context: any) => {
+        if (!currentPath) return null
+
+        const lineText: string = model.getLineContent(position.lineNumber)
+        const textBefore: string = lineText.substring(0, position.column - 1)
+
+        let modParts: string[] = []
+        let leadingDots = 0
+
+        if (context.triggerCharacter === '.') {
+          // Pattern 1: dot trigger in module path
+          const isFrom   = /^\s*from\s+/.test(textBefore)
+          const isImport = !isFrom && /^\s*import\s+/.test(textBefore)
+          if (!isFrom && !isImport) return null
+          const afterKw = textBefore.replace(/^\s*(?:from|import)\s+/, '')
+          const ldm = afterKw.match(/^(\.*)/);
+          leadingDots = ldm ? ldm[1].length : 0
+          const rest = afterKw.slice(leadingDots)
+          if (!rest.endsWith('.')) return null
+          const modStr = rest.slice(0, -1)
+          modParts = modStr ? modStr.split('.') : []
+        } else {
+          // Pattern 2: `from X import <partial>` — complete submodule names from X
+          const m = textBefore.match(/^\s*from\s+(\.*)(\S+)\s+import\s+\w*$/)
+          if (!m) return null
+          leadingDots = m[1].length
+          const modStr = m[2] || ''
+          modParts = modStr ? modStr.split('.') : []
+        }
+
+        // Resolve target directory
+        let targetDir: string | null = null
+
+        // Resolve the directory listing — cache entries at discovery to avoid a second IPC call
+        let rawEntries: Array<{ name: string; is_dir: boolean }> | null = null
+
+        if (leadingDots > 0) {
+          // Relative: always inside project root
+          const parts = currentPath.split('/')
+          parts.pop()
+          for (let i = 0; i < leadingDots - 1 && parts.length > 1; i++) parts.pop()
+          targetDir = modParts.length > 0
+            ? parts.join('/') + '/' + modParts.join('/')
+            : parts.join('/')
+          try {
+            const r = await invoke('list_dir', { path: targetDir })
+            if (Array.isArray(r)) rawEntries = r
+          } catch { /* dir doesn't exist */ }
+        } else {
+          // Absolute: project root first, then pythonSearchPaths (site-packages)
+          const projectRoot = stores?.projectRoot ? (get(stores.projectRoot) as string | null) : null
+          if (projectRoot) {
+            const candidate = modParts.length > 0 ? projectRoot + '/' + modParts.join('/') : projectRoot
+            try {
+              const r = await invoke('list_dir', { path: candidate })
+              if (Array.isArray(r) && r.length > 0) { targetDir = candidate; rawEntries = r }
+            } catch { /* not in project */ }
+          }
+          if (!rawEntries && pythonSearchPaths.length > 0) {
+            for (const root of pythonSearchPaths) {
+              const candidate = modParts.length > 0 ? root + '/' + modParts.join('/') : root
+              try {
+                const r = await invoke('list_python_dir', { dirPath: candidate, roots: pythonSearchPaths })
+                if (Array.isArray(r) && r.length > 0) { targetDir = candidate; rawEntries = r; break }
+              } catch { /* try next */ }
+            }
+          }
+        }
+
+        if (!rawEntries) return null
+
+        const suggestions: any[] = []
+        const seen = new Set<string>()
+        for (const e of rawEntries) {
+          if (e.name.startsWith('.')) continue
+          if (e.name === '__pycache__' || e.name === '__init__.py') continue
+          let label: string | null = null
+          if (e.is_dir && /^[A-Za-z_]\w*$/.test(e.name)) {
+            label = e.name
+          } else if (!e.is_dir && e.name.endsWith('.py') && /^[A-Za-z_]\w*\.py$/.test(e.name)) {
+            label = e.name.slice(0, -3)
+          }
+          if (label && !seen.has(label)) {
+            seen.add(label)
+            suggestions.push({ label, kind: 9, insertText: label, detail: e.is_dir ? 'package' : 'module', sortText: '0' + label })
+          }
+        }
+        return suggestions.length > 0 ? { suggestions, incomplete: false } : null
       },
     })
 
@@ -643,6 +763,17 @@
           }
           requestSemanticTokens(currentPath)
         }
+      })
+    )
+
+    // Keep pythonSearchPaths in sync with the active interpreter for import-path completion
+    unsubs.push(
+      stores.pythonCmd.subscribe(async (cmd: string) => {
+        if (!cmd) { pythonSearchPaths = []; return }
+        try {
+          const paths = await invoke('get_python_paths', { pythonPath: cmd })
+          pythonSearchPaths = Array.isArray(paths) ? paths : []
+        } catch { pythonSearchPaths = [] }
       })
     )
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import '$lib/global.css'
   import { basename } from '$lib/path'
   import FileTree        from '$lib/FileTree.svelte'
@@ -26,6 +26,39 @@
   import GlobeIcon     from 'lucide-svelte/icons/globe'
   import FileTextIcon  from 'lucide-svelte/icons/file-text'
   import FileIcon      from 'lucide-svelte/icons/file'
+
+  const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
+
+  function onTabBarKeydown(e: KeyboardEvent) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    const idx = _openTabs.indexOf(_openFilePath ?? '')
+    if (idx === -1) return
+    e.preventDefault()
+    const nextIdx = e.key === 'ArrowRight'
+      ? Math.min(idx + 1, _openTabs.length - 1)
+      : Math.max(idx - 1, 0)
+    switchTab(_openTabs[nextIdx])
+    tick().then(() => {
+      (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus()
+    })
+  }
+
+  function menuFocus(node: HTMLElement) {
+    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+    return {}
+  }
+
+  function handleMenuKeydown(e: KeyboardEvent, closeMenu: () => void) {
+    e.stopPropagation()
+    if (e.key === 'Escape') { closeMenu(); return }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      const idx = items.indexOf(document.activeElement as HTMLElement)
+      const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
+      items[Math.max(0, next)]?.focus()
+    }
+  }
 
   function tabIconComponent(name: string) {
     const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -269,6 +302,33 @@
     }
   }
 
+  /** Find the closest ancestor venv for a given file path. */
+  function findClosestVenv(filePath: string, venvList: any[]): any | null {
+    if (!filePath || !venvList.length) return null
+    const dir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : filePath
+    let best: any = null
+    let bestLen = -1
+    for (const v of venvList) {
+      if ((dir + '/').startsWith(v.subdir + '/') || dir === v.subdir) {
+        if (v.subdir.length > bestLen) {
+          bestLen = v.subdir.length
+          best = v
+        }
+      }
+    }
+    return best
+  }
+
+  /** Run recursive venv discovery and populate the venvMap store. */
+  async function detectVenvRecursive(folder: string) {
+    try {
+      const list = await mods.invoke('detect_venv_recursive', { projectRoot: folder })
+      if (Array.isArray(list)) mods.stores.venvMap.set(list)
+    } catch (e) {
+      console.warn('[Canopy] detect_venv_recursive:', e)
+    }
+  }
+
   /** Open all .py files in the LSP so it reports project-wide diagnostics. */
   async function scanWorkspace(root: string): Promise<void> {
     let paths: string[]
@@ -365,9 +425,9 @@
         if (venvPython) {
           stores.pythonCmd.set(venvPython)
           configureTyPython(lastProject, venvPython)
-        } else {
-          mods.invoke('watch_for_venv', { root: lastProject }).catch(() => {})
         }
+        detectVenvRecursive(lastProject)
+        mods.invoke('watch_for_venv', { root: lastProject, recursive: true }).catch(() => {})
         stores.lspStatus.set('starting')
         const activeLspId = mods.get(stores.activeLsp)
         const adapter = mods.adapters[activeLspId]
@@ -381,25 +441,60 @@
       }
     }
 
-    // Watch for .venv appearing in projects that didn't have one at open time
+    // Watch for .venv appearing (at any depth) after project open.
+    // The watcher deduplicates, so this fires once per newly created venv.
+    let venvLspRestartTimer: any = null
     unsubs.push(await mods.listen('venv:created', async ({ payload }: any) => {
-      const { root, pythonPath } = payload
+      const { root, pythonPath, venvPath } = payload
       const currentRoot = mods.get(stores.projectRoot)
-      if (root !== currentRoot) return
-      console.log('[Canopy] venv:created detected:', pythonPath)
+      if (!root || !currentRoot) return
+      if (root !== currentRoot && !root.startsWith(currentRoot + '/')) return
+      console.log('[Canopy] venv:created:', pythonPath)
+      // Update venvMap
+      const currentList = mods.get(stores.venvMap) as any[]
+      if (!currentList.some((v: any) => v.pythonPath === pythonPath)) {
+        stores.venvMap.set([...currentList, { subdir: root, pythonPath, venvPath: venvPath ?? '', isUv: false }])
+      }
       stores.pythonCmd.set(pythonPath)
-      await configureTyPython(root, pythonPath)
-      // Restart LSP so it picks up the new Python version from pyproject.toml
+      const venvName = venvPath ? venvPath.split('/').pop() : '.venv'
+      showToast(`Using ${venvName}`)
+      await configureTyPython(currentRoot, pythonPath)
+      // Debounce LSP restart — watcher may send one event per file inside the venv
       const activeLspId = mods.get(stores.activeLsp)
       if (activeLspId !== 'ty') return
-      stores.lspStatus.set('starting')
-      stores.diagnosticsByUri.set(new Map())
-      try {
-        const adapter = mods.adapters[activeLspId]
-        await mods.lspClient.start(root, adapter, pythonPath, undefined)
-        stores.lspStatus.set('ready')
-        scanWorkspace(root)
-      } catch { stores.lspStatus.set('error') }
+      if (venvLspRestartTimer) clearTimeout(venvLspRestartTimer)
+      venvLspRestartTimer = setTimeout(async () => {
+        venvLspRestartTimer = null
+        const py = mods.get(stores.pythonCmd)
+        stores.lspStatus.set('starting')
+        stores.diagnosticsByUri.set(new Map())
+        try {
+          const adapter = mods.adapters['ty']
+          await mods.lspClient.start(currentRoot, adapter, py, undefined)
+          stores.lspStatus.set('ready')
+          scanWorkspace(currentRoot)
+        } catch { stores.lspStatus.set('error') }
+      }, 800)
+    }))
+
+    // Auto-switch pythonCmd to the venv nearest to the active file (monorepo support).
+    // Only toasts when switching to a different venv, not on every file open.
+    let _lastToastedVenvPath = ''
+    unsubs.push(stores.openFilePath.subscribe((filePath: string | null) => {
+      if (!filePath) return
+      const venvList = mods.get(stores.venvMap) as any[]
+      if (venvList.length < 2) return  // only auto-switch in monorepos with multiple envs
+      const match = findClosestVenv(filePath, venvList)
+      if (!match) return
+      if (match.pythonPath === mods.get(stores.pythonCmd)) return
+      stores.pythonCmd.set(match.pythonPath)
+      if (match.venvPath !== _lastToastedVenvPath) {
+        _lastToastedVenvPath = match.venvPath
+        const venvName = match.venvPath.split('/').pop() ?? '.venv'
+        const rel = match.subdir !== mods.get(stores.projectRoot)
+          ? ` · ${match.subdir.split('/').pop()}` : ''
+        showToast(`Using ${venvName}${rel}`)
+      }
     }))
 
     return unsubs
@@ -694,14 +789,16 @@
 
   // --- File operations ---
 
-  async function gatherFiles(dir: string, depth = 0): Promise<string[]> {
-    if (depth > 6) return []
-    const entries = await mods.invoke('read_dir_recursive', { path: dir, depth })
+  async function gatherFiles(dir: string): Promise<string[]> {
+    const tree = await mods.invoke('read_dir_recursive', { path: dir, depth: 6 }) as any[]
     const results: string[] = []
-    for (const e of entries as any[]) {
-      if (e.is_dir) results.push(...await gatherFiles(e.path, depth + 1))
-      else results.push(e.path)
+    function flatten(entries: any[]) {
+      for (const e of entries) {
+        if (e.is_dir) { if (e.children) flatten(e.children) }
+        else results.push(e.path)
+      }
     }
+    flatten(tree)
     return results
   }
 
@@ -738,6 +835,7 @@
       mods.stores.dirtyTabs.set(new Set())
 
       mods.stores.projectRoot.set(folder)
+      mods.stores.venvMap.set([])
       watchConfigFiles(folder)
 
       // Restore saved session for the new folder.
@@ -759,20 +857,19 @@
       if (myGen === switchGen) switchingProject = false
     }
 
-    // Auto-detect venv
-    let detectedPython: string | null = null
+    // Auto-detect venv (root-level fast path, then full recursive scan)
     try {
-      detectedPython = await mods.invoke('detect_venv', { projectRoot: folder })
+      const detectedPython = await mods.invoke('detect_venv', { projectRoot: folder })
       if (detectedPython) {
         console.log('[Canopy] detected venv python:', detectedPython)
         mods.stores.pythonCmd.set(detectedPython)
         configureTyPython(folder, detectedPython)
-      } else {
-        mods.invoke('watch_for_venv', { root: folder }).catch(() => {})
       }
     } catch (e) {
       console.warn('detect_venv:', e)
     }
+    detectVenvRecursive(folder)
+    mods.invoke('watch_for_venv', { root: folder, recursive: true }).catch(() => {})
 
     // Start LSP
     mods.stores.lspStatus.set('starting')
@@ -878,7 +975,7 @@
     <pre>{error}</pre>
   </div>
 {:else if !mounted}
-  <div class="loading">Loading…</div>
+  <div class="loading" role="status" aria-live="polite">Loading…</div>
 {:else}
 <div class="app">
 
@@ -911,23 +1008,33 @@
 
     <div class="editor-col">
       <!-- Tab bar -->
-      <div class="tab-bar">
+      <!-- svelte-ignore a11y_interactive_supports_focus -->
+      <div class="tab-bar" role="tablist" onkeydown={onTabBarKeydown}>
         {#if _openTabs.length > 0}
           {#each _openTabs as tab}
             {@const tabName = basename(tab)}
             {@const TabIcon = tabIconComponent(tabName)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <div role="tab" tabindex="0" class="tab" class:active={tab === _openFilePath} class:dirty={_dirtyTabs.has(tab)} onclick={() => switchTab(tab)} oncontextmenu={(e) => onTabContextMenu(e, tab)}>
+            <div
+              role="tab"
+              tabindex={tab === _openFilePath ? 0 : -1}
+              aria-selected={tab === _openFilePath}
+              class="tab"
+              class:active={tab === _openFilePath}
+              class:dirty={_dirtyTabs.has(tab)}
+              onclick={() => switchTab(tab)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchTab(tab) } }}
+              oncontextmenu={(e) => onTabContextMenu(e, tab)}
+            >
               {#if _dirtyTabs.has(tab)}<span class="dirty-dot" aria-label="unsaved">●</span>{/if}
               <span class="tab-icon" style="color:{tabIconColor(tabName)}"><TabIcon size={12} strokeWidth={1.5} /></span>
               <span class="tab-name">{tabName}</span>
-              <button class="tab-close" onclick={(e) => closeTab(tab, e)}>×</button>
+              <button class="tab-close" aria-label="Close {tabName}" onclick={(e) => closeTab(tab, e)}>×</button>
             </div>
           {/each}
         {:else if _projectRoot}
-          <span class="tab-hint">Cmd+O to open a folder</span>
+          <span class="tab-hint">{isMac ? 'Cmd' : 'Ctrl'}+O to open a folder</span>
         {:else}
-          <span class="tab-hint">Cmd+O to open a folder</span>
+          <span class="tab-hint">{isMac ? 'Cmd' : 'Ctrl'}+O to open a folder</span>
         {/if}
       </div>
 
@@ -936,14 +1043,14 @@
         <Editor />
       </div>
 
-      {#if true}
+      <div style:display={_showTerminal ? 'contents' : 'none'}>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="resize-h" onmousedown={startResizeTerm}></div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="term-panel" style="height:{terminalHeight}px" onmousedown={() => mods.stores.focusedPane.set('terminal')}>
           <Terminal bind:this={terminalRef} />
         </div>
-      {/if}
+      </div>
     </div>
   </div>
 
@@ -951,10 +1058,17 @@
 </div>
 
 {#if tabCtxMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="ctx-menu" style="left:{tabCtxMenu.x}px;top:{tabCtxMenu.y}px" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-    <button onclick={() => { closeTab(tabCtxMenu!.tab); tabCtxMenu = null }}>Close</button>
-    <button onclick={() => { closeOtherTabs(tabCtxMenu!.tab); tabCtxMenu = null }}>Close Others</button>
+  <div
+    class="ctx-menu"
+    role="menu"
+    tabindex="-1"
+    style="left:{tabCtxMenu.x}px;top:{tabCtxMenu.y}px"
+    use:menuFocus
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => handleMenuKeydown(e, () => { tabCtxMenu = null })}
+  >
+    <button role="menuitem" onclick={() => { closeTab(tabCtxMenu!.tab); tabCtxMenu = null }}>Close</button>
+    <button role="menuitem" onclick={() => { closeOtherTabs(tabCtxMenu!.tab); tabCtxMenu = null }}>Close Others</button>
   </div>
 {/if}
 
@@ -986,13 +1100,11 @@
   onCancel={() => resolveDialog('cancel')}
 />
 
-{#if toasts.length > 0}
-  <div class="toast-container">
-    {#each toasts as toast (toast.id)}
-      <div class="toast">{toast.message}</div>
-    {/each}
-  </div>
-{/if}
+<div class="toast-container" aria-live="polite" aria-atomic="true">
+  {#each toasts as toast (toast.id)}
+    <div class="toast">{toast.message}</div>
+  {/each}
+</div>
 {/if}
 
 <style>
@@ -1063,8 +1175,8 @@
 
   /* Toast notifications */
   .toast-container {
-    position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    position: fixed; bottom: 36px; right: 12px;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
     z-index: 10000; pointer-events: none;
   }
   .toast {

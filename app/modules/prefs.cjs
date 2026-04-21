@@ -13,7 +13,7 @@ let _cachedPrefs = null
 
 const PREF_VALIDATORS = {
   last_project:      (v) => v === null || typeof v === 'string',
-  preferred_shell:   (v) => v === null || typeof v === 'string',
+  preferred_shell:   (v) => v === null || (typeof v === 'string' && path.isAbsolute(v)),
   project_sessions:  (v) => {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
     const keys = Object.keys(v)
@@ -33,7 +33,7 @@ const PREF_VALIDATORS = {
   tree_font_size:    (v) => typeof v === 'number' && v >= 8 && v <= 72,
   term_font_size:    (v) => typeof v === 'number' && v >= 8 && v <= 72,
   active_lsp:        (v) => v === null || typeof v === 'string',
-  python_cmd:        (v) => v === null || typeof v === 'string',
+  python_cmd:        (v) => v === null || (typeof v === 'string' && path.isAbsolute(v)),
   terminal_height:   (v) => typeof v === 'number' && v >= 50 && v <= 2000,
   tree_width:        (v) => typeof v === 'number' && v >= 80 && v <= 1000,
   show_terminal:     (v) => typeof v === 'boolean',
@@ -71,23 +71,41 @@ function registerPrefsHandlers(ipcMain) {
   })
 
   let pendingWrite = null
+  let nextPayload = null
+
   ipcMain.handle('save_prefs', (_event, args) => {
     const p = prefsPath()
     const dir = path.dirname(p)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     const sanitized = sanitizePrefs(args.prefs)
     _cachedPrefs = sanitized  // update cache immediately
-    const data = JSON.stringify(sanitized, null, 2)
-    if (pendingWrite) return pendingWrite
-    pendingWrite = fs.promises.writeFile(p, data).finally(() => { pendingWrite = null })
-    return pendingWrite
+
+    if (pendingWrite) {
+      nextPayload = sanitized
+      return pendingWrite
+    }
+
+    const doWrite = (payload) => {
+      pendingWrite = fs.promises.writeFile(p, JSON.stringify(payload, null, 2))
+        .finally(() => {
+          pendingWrite = null
+          if (nextPayload !== null) {
+            const p2 = nextPayload
+            nextPayload = null
+            doWrite(p2)
+          }
+        })
+      return pendingWrite
+    }
+
+    return doWrite(sanitized)
   })
 
   ipcMain.handle('list_shells', async () => {
     if (process.platform === 'win32') {
       const candidates = ['powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe']
       return candidates.filter(s => {
-        try { require('child_process').execSync(`where ${s}`, { stdio: 'ignore' }); return true } catch { return false }
+        try { require('child_process').execFileSync('where', [s], { stdio: 'ignore' }); return true } catch { return false }
       })
     }
     try {

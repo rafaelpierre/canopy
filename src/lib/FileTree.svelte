@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import ChevronRightIcon from 'lucide-svelte/icons/chevron-right'
   import ChevronDownIcon  from 'lucide-svelte/icons/chevron-down'
   import FolderIcon from 'lucide-svelte/icons/folder'
@@ -35,6 +35,7 @@
   let invoke:  any
   let stores:  any
   let cleanups: Array<() => void> = []
+  let treeEl: HTMLElement
 
   let tree:        FileEntry[]           = $state([])
   let expanded     = $state(new Set<string>())
@@ -126,6 +127,10 @@
   let renamingPath = $state<string | null>(null)
   let renameValue  = $state('')
 
+  // Inline new-file / new-folder creation
+  let creatingIn:    { dir: string; kind: 'file' | 'folder' } | null = $state(null)
+  let creatingValue = $state('')
+
   // Active path highlighting
   let activeFolders = $state(new Set<string>())
 
@@ -156,19 +161,19 @@
     invoke = ipcMod.invoke
     stores = storesMod
 
-    stores.openFilePath.subscribe((p: string | null) => {
+    cleanups.push(stores.openFilePath.subscribe((p: string | null) => {
       activeFile = p ?? ''
       if (p) updateActiveFolders(p)
-    })
-    stores.treeFontSize.subscribe((s: number) => { fontSize = s })
-    stores.projectRoot.subscribe((root: string | null) => {
+    }))
+    cleanups.push(stores.treeFontSize.subscribe((s: number) => { fontSize = s }))
+    cleanups.push(stores.projectRoot.subscribe((root: string | null) => {
       projectRoot = root
       if (root) {
         loadTree(root)
         loadGitignore(root)
         invoke('watch_project', { root }).catch(() => {})
       }
-    })
+    }))
 
     // On any fs change: reload tree + re-read gitignore (covers .gitignore edits)
     cleanups.push(await ipcMod.listen('dir:changed', () => {
@@ -210,7 +215,28 @@
     return result
   }
 
+  type FlatOrCreate = FlatEntry | { _creating: true; dir: string; kind: 'file' | 'folder'; depth: number }
+
   let flat: FlatEntry[] = $derived(flatten(tree, 1))
+
+  let flatWithCreate: FlatOrCreate[] = $derived.by(() => {
+    if (!creatingIn) return flat as FlatOrCreate[]
+    const result: FlatOrCreate[] = []
+    let inserted = false
+    const parentDepth = flat.find(e => e.path === creatingIn!.dir)?.depth ?? 0
+    for (const entry of flat) {
+      result.push(entry as FlatOrCreate)
+      if (!inserted && entry.path === creatingIn!.dir) {
+        result.push({ _creating: true, dir: creatingIn!.dir, kind: creatingIn!.kind, depth: parentDepth + 1 })
+        inserted = true
+      }
+    }
+    if (!inserted) {
+      // Parent is root (not in flat) — insert as first child
+      result.unshift({ _creating: true, dir: creatingIn!.dir, kind: creatingIn!.kind, depth: 1 })
+    }
+    return result
+  })
 
   async function handleClick(entry: FlatEntry) {
     if (entry.is_dir) {
@@ -244,33 +270,63 @@
   function closeCtxMenu() {
     ctxMenu = null
     if (renamingPath) { renamingPath = null; renameValue = '' }
+    // Don't cancel creatingIn here — its own onblur handles commit/cancel
   }
 
   async function ctxNewFile(dir: string) {
     closeCtxMenu()
-    const name = prompt('New file name:')
-    if (!name?.trim()) return
-    const newPath = dir + '/' + name.trim()
-    try {
-      await invoke('create_file', { path: newPath })
-      await loadTree(projectRoot!)
-      const tabs = (await import('svelte/store')).get(stores.openTabs) as string[]
-      if (!tabs.includes(newPath)) stores.openTabs.set([...tabs, newPath])
-      stores.openFilePath.set(newPath)
-    } catch (e: any) { alert('Could not create file: ' + e.message) }
+    await ensureDirExpanded(dir)
+    creatingIn    = { dir, kind: 'file' }
+    creatingValue = ''
   }
 
   async function ctxNewFolder(dir: string) {
     closeCtxMenu()
-    const name = prompt('New folder name:')
-    if (!name?.trim()) return
-    try {
-      await invoke('create_dir', { path: dir + '/' + name.trim() })
-      await loadTree(projectRoot!)
-    } catch (e: any) { alert('Could not create folder: ' + e.message) }
+    await ensureDirExpanded(dir)
+    creatingIn    = { dir, kind: 'folder' }
+    creatingValue = ''
   }
 
-  function ctxCopy(entry: FlatEntry) {
+  async function ensureDirExpanded(dir: string) {
+    if (dir === projectRoot || expanded.has(dir)) return
+    if (!childrenMap.has(dir)) {
+      const children = await invoke('read_dir_recursive', { path: dir, depth: 0 })
+      childrenMap.set(dir, children)
+      childrenMap = new Map(childrenMap)
+    }
+    expanded.add(dir)
+    expanded = new Set(expanded)
+  }
+
+  async function commitCreate() {
+    const creating = creatingIn
+    const name     = creatingValue.trim()
+    creatingIn    = null
+    creatingValue = ''
+    if (!creating || !name) return
+    const newPath = creating.dir + '/' + name
+    try {
+      if (creating.kind === 'file') {
+        await invoke('create_file', { path: newPath })
+        await loadTree(projectRoot!)
+        const { get } = await import('svelte/store')
+        const tabs = get(stores.openTabs) as string[]
+        if (!tabs.includes(newPath)) stores.openTabs.set([...tabs, newPath])
+        stores.openFilePath.set(newPath)
+      } else {
+        await invoke('create_dir', { path: newPath })
+        await loadTree(projectRoot!)
+      }
+      await tick()
+      focusTreeItem(newPath)
+    } catch (e: any) { alert('Could not create: ' + e.message) }
+  }
+
+  function focusTreeItem(path: string) {
+    treeEl?.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)?.focus()
+  }
+
+  function ctxCut(entry: FlatEntry) {
     clipboard = { path: entry.path, isDir: entry.is_dir }
     closeCtxMenu()
   }
@@ -283,7 +339,7 @@
       await invoke('rename_path', { src: clipboard.path, dst })
       clipboard = null
       await loadTree(projectRoot!)
-    } catch (e: any) { alert('Could not paste: ' + e.message) }
+    } catch (e: any) { alert('Could not move: ' + e.message) }
   }
 
   async function ctxDelete(entry: FlatEntry) {
@@ -380,31 +436,50 @@
   // Chevron size is slightly smaller than the file icon
   let iconSize:    number = $derived(Math.round(fontSize * 1.0))
   let chevronSize: number = $derived(Math.max(12, Math.round(fontSize * 0.92)))
+
+  function menuFocus(node: HTMLElement) {
+    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+    return {}
+  }
+
+  function handleCtxMenuKeydown(e: KeyboardEvent) {
+    e.stopPropagation()
+    if (e.key === 'Escape') { closeCtxMenu(); return }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      const idx = items.indexOf(document.activeElement as HTMLElement)
+      const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
+      items[Math.max(0, next)]?.focus()
+    }
+  }
 </script>
 
 {#if ctxMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="ctx-menu"
+    role="menu"
+    tabindex="-1"
     style="left:{ctxMenu.x}px;top:{ctxMenu.y}px"
+    use:menuFocus
     onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
+    onkeydown={handleCtxMenuKeydown}
   >
     {#if ctxMenu.entry?.is_dir || ctxMenu.entry === null}
       {@const dir = ctxMenu.entry?.path ?? projectRoot!}
-      <button onclick={() => ctxNewFile(dir)}>New File</button>
-      <button onclick={() => ctxNewFolder(dir)}>New Folder</button>
+      <button role="menuitem" onclick={() => ctxNewFile(dir)}>New File</button>
+      <button role="menuitem" onclick={() => ctxNewFolder(dir)}>New Folder</button>
       {#if clipboard}
         <div class="ctx-sep"></div>
-        <button onclick={() => ctxPaste(dir)}>Paste</button>
+        <button role="menuitem" onclick={() => ctxPaste(dir)}>Paste</button>
       {/if}
     {/if}
     {#if ctxMenu.entry}
       <div class="ctx-sep"></div>
-      <button onclick={() => ctxCopy(ctxMenu!.entry!)}>Copy</button>
-      <button onclick={() => ctxStartRename(ctxMenu!.entry!)}>Rename</button>
+      <button role="menuitem" onclick={() => ctxCut(ctxMenu!.entry!)}>Cut</button>
+      <button role="menuitem" onclick={() => ctxStartRename(ctxMenu!.entry!)}>Rename</button>
       <div class="ctx-sep"></div>
-      <button class="danger" onclick={() => ctxDelete(ctxMenu!.entry!)}>Delete</button>
+      <button role="menuitem" class="danger" onclick={() => ctxDelete(ctxMenu!.entry!)}>Delete</button>
     {/if}
   </div>
 {/if}
@@ -413,6 +488,7 @@
 <div
   class="tree"
   style="font-size:{fontSize}px"
+  bind:this={treeEl}
   oncontextmenu={(e) => openCtxMenu(e, null)}
 >
   {#if projectRoot}
@@ -427,64 +503,98 @@
     </div>
   {/if}
 
-  {#each flat as entry (entry.path)}
-    {@const EntryIcon = fileIconComponent(entry)}
-    {@const ignored   = isIgnored(entry)}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      role="button"
-      tabindex="0"
-      class="tree-item"
-      class:is-dir={entry.is_dir}
-      class:is-active={entry.path === activeFile}
-      class:in-path={entry.is_dir && activeFolders.has(entry.path)}
-      class:gitignored={ignored}
-      style="padding-left:{6 + entry.depth * 16}px;height:{Math.round(fontSize * 2.0)}px"
-      onclick={() => handleClick(entry)}
-      oncontextmenu={(e) => openCtxMenu(e, entry)}
-      title={entry.path}
-    >
-      <!-- Chevron for folders; invisible spacer for files so icons align -->
-      {#if entry.is_dir}
-        <span class="chevron" style="width:{chevronSize}px;height:{chevronSize}px">
-          {#if entry.expanded}
-            <ChevronDownIcon  size={chevronSize} strokeWidth={1} />
+  {#each flatWithCreate as item ('_creating' in item ? '__creating__' : item.path)}
+    {#if '_creating' in item}
+      <div
+        class="tree-item"
+        style="padding-left:{6 + item.depth * 16}px;height:{Math.round(fontSize * 2.0)}px"
+        role="presentation"
+      >
+        <span class="chevron-spacer" style="width:{chevronSize}px"></span>
+        <span class="icon" style="color:var(--text-muted);width:{iconSize+2}px;height:{iconSize+2}px">
+          {#if item.kind === 'folder'}
+            <FolderIcon size={iconSize} strokeWidth={1.5} />
           {:else}
-            <ChevronRightIcon size={chevronSize} strokeWidth={1} />
+            <FileIcon size={iconSize} strokeWidth={1.5} />
           {/if}
         </span>
-      {:else}
-        <span class="chevron-spacer" style="width:{chevronSize}px"></span>
-      {/if}
-
-      <span class="icon" style="color:{iconColor(entry, ignored)};width:{iconSize+2}px;height:{iconSize+2}px">
-        <EntryIcon size={iconSize} strokeWidth={1.5} />
-      </span>
-
-      {#if renamingPath === entry.path}
         <!-- svelte-ignore a11y_autofocus -->
         <input
           class="rename-input"
-          bind:value={renameValue}
+          bind:value={creatingValue}
           autofocus
+          placeholder={item.kind === 'folder' ? 'folder name' : 'file name'}
           onclick={(e) => e.stopPropagation()}
           onkeydown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commitRename(entry) }
-            if (e.key === 'Escape') { renamingPath = null; renameValue = '' }
+            if (e.key === 'Enter') { e.preventDefault(); commitCreate() }
+            if (e.key === 'Escape') { creatingIn = null; creatingValue = '' }
           }}
-          onblur={() => commitRename(entry)}
+          onblur={commitCreate}
         />
-      {:else}
-        <span class="name">{entry.name}</span>
-        {#if !ignored}
-          {#if errorPaths.has(entry.path)}
-            <span class="diag-dot error" title="Has errors"></span>
-          {:else if warningPaths.has(entry.path)}
-            <span class="diag-dot warning" title="Has warnings"></span>
+      </div>
+    {:else}
+      {@const entry    = item as FlatEntry}
+      {@const EntryIcon = fileIconComponent(entry)}
+      {@const ignored   = isIgnored(entry)}
+      <div
+        role="button"
+        tabindex="0"
+        class="tree-item"
+        class:is-dir={entry.is_dir}
+        class:is-active={entry.path === activeFile}
+        class:in-path={entry.is_dir && activeFolders.has(entry.path)}
+        class:gitignored={ignored}
+        style="padding-left:{6 + entry.depth * 16}px;height:{Math.round(fontSize * 2.0)}px"
+        data-path={entry.path}
+        onclick={() => handleClick(entry)}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(entry) }
+        }}
+        oncontextmenu={(e) => openCtxMenu(e, entry)}
+        title={entry.path}
+      >
+        <!-- Chevron for folders; invisible spacer for files so icons align -->
+        {#if entry.is_dir}
+          <span class="chevron" style="width:{chevronSize}px;height:{chevronSize}px">
+            {#if entry.expanded}
+              <ChevronDownIcon  size={chevronSize} strokeWidth={1} />
+            {:else}
+              <ChevronRightIcon size={chevronSize} strokeWidth={1} />
+            {/if}
+          </span>
+        {:else}
+          <span class="chevron-spacer" style="width:{chevronSize}px"></span>
+        {/if}
+
+        <span class="icon" style="color:{iconColor(entry, ignored)};width:{iconSize+2}px;height:{iconSize+2}px">
+          <EntryIcon size={iconSize} strokeWidth={1.5} />
+        </span>
+
+        {#if renamingPath === entry.path}
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="rename-input"
+            bind:value={renameValue}
+            autofocus
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commitRename(entry) }
+              if (e.key === 'Escape') { renamingPath = null; renameValue = '' }
+            }}
+            onblur={() => { renamingPath = null; renameValue = '' }}
+          />
+        {:else}
+          <span class="name">{entry.name}</span>
+          {#if !ignored}
+            {#if errorPaths.has(entry.path)}
+              <span class="diag-dot error" title="Has errors"></span>
+            {:else if warningPaths.has(entry.path)}
+              <span class="diag-dot warning" title="Has warnings"></span>
+            {/if}
           {/if}
         {/if}
-      {/if}
-    </div>
+      </div>
+    {/if}
   {/each}
 </div>
 

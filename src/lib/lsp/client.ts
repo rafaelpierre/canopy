@@ -29,8 +29,9 @@ class LspClient {
   private handlers    = new Map<string, (params: any) => void>()
   // Diagnostic notifications that arrived before onDiagnostics was registered
   private _bufferedDiags: Array<{ uri: string; diagnostics: any[] }> = []
-  private unlisten:        UnlistenFn | null = null
-  private _unlistenExit:   UnlistenFn | null = null
+  private unlisten:              UnlistenFn | null = null
+  private _unlistenExit:         UnlistenFn | null = null
+  private _unlistenWatchedFiles: UnlistenFn | null = null
   private openFiles   = new Map<string, number>()  // uri -> version
   private _ready      = false
   private _serverTokenTypes: string[] = []
@@ -60,9 +61,16 @@ class LspClient {
 
     if (this.unlisten) this.unlisten()
     this._unlistenExit?.()
+    this._unlistenWatchedFiles?.()
     this.unlisten = await listen<string>('lsp://message', ({ payload }) => {
       this.dispatch(payload)
     })
+    this._unlistenWatchedFiles = await listen<Array<{ uri: string; type: number }>>('lsp:watched-files-changed', ({ payload }) => {
+      if (this._ready && payload.length > 0) {
+        this.notify('workspace/didChangeWatchedFiles', { changes: payload })
+      }
+    })
+
     this._unlistenExit = await listen<{ code: number | null; signal: string | null }>('lsp://exit', () => {
       if (this._ready) {
         console.warn('[LSP] process exited unexpectedly')
@@ -131,6 +139,7 @@ class LspClient {
           workspaceFolders: true,
           configuration: true,
           didChangeConfiguration: { dynamicRegistration: false },
+          didChangeWatchedFiles:  { dynamicRegistration: true },
         },
       },
       initializationOptions: adapter.initOptions(this._pythonPath, rootPath),
@@ -161,6 +170,8 @@ class LspClient {
     this.unlisten = null
     this._unlistenExit?.()
     this._unlistenExit = null
+    this._unlistenWatchedFiles?.()
+    this._unlistenWatchedFiles = null
     this.pending.clear()
     this.openFiles.clear()
     this._bufferedDiags = []
@@ -191,6 +202,9 @@ class LspClient {
         msg.error ? p.reject(msg.error) : p.resolve(msg.result)
       }
     } else if (msg.method) {
+      if (msg.method === 'textDocument/publishDiagnostics') {
+        if (typeof msg.params?.uri !== 'string' || !Array.isArray(msg.params?.diagnostics)) return
+      }
       const handler = this.handlers.get(msg.method)
       if (handler) {
         // Defer notification handlers to the next microtask so expensive handlers
@@ -199,7 +213,7 @@ class LspClient {
       } else if (msg.method === 'textDocument/publishDiagnostics') {
         // Buffer diagnostics that arrive before onDiagnostics is registered
         // (race: LSP responds fast on first run before Monaco finishes importing)
-        this._bufferedDiags.push({ uri: msg.params?.uri, diagnostics: msg.params?.diagnostics ?? [] })
+        this._bufferedDiags.push({ uri: msg.params.uri, diagnostics: msg.params.diagnostics })
       }
     }
   }
@@ -309,6 +323,7 @@ class LspClient {
     triggerCharacter?: string,
   ): Promise<{ items: LspCompletionItem[] } | null> {
     const context: Record<string, any> = { triggerKind }
+    // LSP TriggerCharacter = 2
     if (triggerKind === 2 && triggerCharacter) context.triggerCharacter = triggerCharacter
     return this.request('textDocument/completion', {
       textDocument: { uri: pathToUri(filePath) },

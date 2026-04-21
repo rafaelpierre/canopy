@@ -2,9 +2,10 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 const ALLOWED_INVOKE = new Set([
   'set_project_root', 'read_dir_recursive', 'read_file_content', 'write_file_content', 'grep_files', 'list_py_files',
+  'list_dir', 'list_python_dir', 'get_python_paths',
   'pty_spawn', 'pty_write', 'pty_resize', 'pty_kill',
   'lsp_start', 'lsp_send', 'lsp_stop', 'lsp_which_binary', 'lsp_install_tool',
-  'check_setup', 'detect_venv', 'check_lsp_available', 'install_ty', 'configure_ty_python',
+  'check_setup', 'detect_venv', 'detect_venv_recursive', 'check_lsp_available', 'install_ty', 'configure_ty_python',
   'watch_for_venv',
   'load_prefs', 'save_prefs', 'list_shells',
   'dialog:openFolder', 'dialog:openFile',
@@ -18,6 +19,7 @@ const ALLOWED_INVOKE = new Set([
 const ALLOWED_LISTEN = new Set([
   'lsp://message', 'lsp://exit', 'pty:data', 'pty:exit', 'menu:action',
   'file:changed-on-disk', 'venv:created', 'app:before-quit', 'dir:changed',
+  'lsp:watched-files-changed',
 ])
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -35,6 +37,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener(channel, handler)
   },
 
-  openFolderDialog: () => ipcRenderer.invoke('dialog:openFolder'),
   openFileDialog: (options) => ipcRenderer.invoke('dialog:openFile', options),
 })

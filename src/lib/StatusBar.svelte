@@ -14,11 +14,14 @@
   let _installPending  = $state<string | null>(null)  // lspId awaiting confirmation
   let _openFile        = $state<string | null>(null)
   let _pythonCmd       = $state('python3')
+  let _venvMap         = $state<any[]>([])
+  let _projectRoot     = $state<string | null>(null)
   let _activeLsp       = $state<string>('basedpyright')
   let stores: any
   let invoke: any
   let _clickCleanup: (() => void) | null = null
   let lspCtxMenu: { x: number; bottom: number; right: number } | null = $state(null)
+  let venvMenu: { x: number; bottom: number } | null = $state(null)
 
   function recomputeFileCounts(map: Map<string, any[]>, path: string | null) {
     if (!path) { _fileErrors = 0; _fileWarnings = 0; return }
@@ -38,21 +41,27 @@
     const ipcMod = await import('$lib/ipc')
     invoke = ipcMod.invoke
     stores = await import('./stores')
-    stores.diagnostics.subscribe((v: any) => { _diagnostics = v })
-    stores.diagnosticsByUri.subscribe((map: any) => {
+    const _unsubs: (() => void)[] = []
+    _unsubs.push(stores.diagnostics.subscribe((v: any) => { _diagnostics = v }))
+    _unsubs.push(stores.diagnosticsByUri.subscribe((map: any) => {
       _diagByUri = map
       recomputeFileCounts(map, _openFile)
-    })
-    stores.lspStatus.subscribe((v: any) => { _lspStatus = v })
-    stores.lspBusy.subscribe((v: any) => { _lspBusy = v })
-    stores.openFilePath.subscribe((v: any) => {
+    }))
+    _unsubs.push(stores.lspStatus.subscribe((v: any) => { _lspStatus = v }))
+    _unsubs.push(stores.lspBusy.subscribe((v: any) => { _lspBusy = v }))
+    _unsubs.push(stores.openFilePath.subscribe((v: any) => {
       _openFile = v
       recomputeFileCounts(_diagByUri, v)
-    })
-    stores.pythonCmd.subscribe((v: any) => { _pythonCmd = v })
-    stores.activeLsp.subscribe((v: any) => { _activeLsp = v })
-    window.addEventListener('click', closeLspCtxMenu)
-    _clickCleanup = () => window.removeEventListener('click', closeLspCtxMenu)
+    }))
+    _unsubs.push(stores.pythonCmd.subscribe((v: any) => { _pythonCmd = v }))
+    _unsubs.push(stores.venvMap.subscribe((v: any) => { _venvMap = v }))
+    _unsubs.push(stores.projectRoot.subscribe((v: any) => { _projectRoot = v }))
+    _unsubs.push(stores.activeLsp.subscribe((v: any) => { _activeLsp = v }))
+    window.addEventListener('click', closeAllMenus)
+    _clickCleanup = () => {
+      window.removeEventListener('click', closeAllMenus)
+      for (const u of _unsubs) u()
+    }
   })
 
   onDestroy(() => _clickCleanup?.())
@@ -79,7 +88,34 @@
     }
   }
 
+  function closeAllMenus() { lspCtxMenu = null; venvMenu = null }
   function closeLspCtxMenu() { lspCtxMenu = null }
+
+  function venvLabel(v: any, projectRoot: string | null): string {
+    if (!projectRoot) return pythonLabel(v.pythonPath)
+    const rel = v.subdir === projectRoot ? '.' : v.subdir.replace(projectRoot + '/', '')
+    const venvName = v.venvPath.split('/').pop() ?? '.venv'
+    const uvTag = v.isUv ? ' uv' : ''
+    return `(${venvName}${uvTag}) · ${rel}`
+  }
+
+  function showVenvMenu(e: MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    lspCtxMenu = null
+    const target = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    venvMenu = { x: target.left, bottom: window.innerHeight - target.top + 2 }
+  }
+
+  async function pickVenv(pythonPath: string) {
+    venvMenu = null
+    stores.pythonCmd.set(pythonPath)
+  }
+
+  function lspMenuFocus(node: HTMLElement) {
+    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+    return {}
+  }
 
   function showLspMenu(e: MouseEvent) {
     e.preventDefault()
@@ -136,9 +172,15 @@
 
 <div class="statusbar">
   <div class="left">
-    <button class="item python-cmd clickable" onclick={selectPython} title={_pythonCmd}>
-      {pythonLabel(_pythonCmd)}
-    </button>
+    {#if _venvMap.length > 1}
+      <button class="item python-cmd clickable" onclick={showVenvMenu} title={_pythonCmd}>
+        {pythonLabel(_pythonCmd)} <span class="venv-caret">▾</span>
+      </button>
+    {:else}
+      <button class="item python-cmd clickable" onclick={selectPython} title={_pythonCmd}>
+        {pythonLabel(_pythonCmd)}
+      </button>
+    {/if}
   </div>
 
   <div class="center"></div>
@@ -158,22 +200,59 @@
 
     <button class="item lsp-status clickable" class:ready={_lspStatus === 'ready'} class:lsp-error={_lspStatus === 'error'} onclick={showLspMenu} title="Click to switch LSP">
       {#if _lspStatus === 'starting' || _lspBusy || _installing}
-        <span class="lsp-spinner" title={_installing ? 'Installing…' : _lspStatus === 'starting' ? 'LSP starting…' : 'Scanning workspace…'}></span>
+        <span class="lsp-spinner" title={_installing ? 'Installing…' : _lspStatus === 'starting' ? 'LSP starting…' : 'Scanning workspace…'}><span class="sr-only">{_installing ? 'Installing' : 'Loading'}</span></span>
       {/if}
-      {#if _lspStatus === 'ready'}{_activeLsp}
-      {:else if _lspStatus === 'starting'}starting…
-      {:else if _lspStatus === 'error'}lsp error
-      {:else}no lsp
-      {/if}
+      <span aria-live="polite">
+        {#if _lspStatus === 'ready'}{_activeLsp}
+        {:else if _lspStatus === 'starting'}starting…
+        {:else if _lspStatus === 'error'}lsp error
+        {:else}no lsp
+        {/if}
+      </span>
     </button>
   </div>
 </div>
 
 {#if lspCtxMenu}
+  <div
+    class="lsp-menu"
+    role="menu"
+    tabindex="-1"
+    style="right:{lspCtxMenu.right}px;bottom:{lspCtxMenu.bottom}px"
+    use:lspMenuFocus
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => {
+      e.stopPropagation()
+      if (e.key === 'Escape') { lspCtxMenu = null; return }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        const idx = items.indexOf(document.activeElement as HTMLElement)
+        const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
+        items[Math.max(0, next)]?.focus()
+      }
+    }}
+  >
+    <button role="menuitem" class:active={_activeLsp === 'basedpyright'} onclick={() => selectLsp('basedpyright')}>basedpyright</button>
+    <button role="menuitem" class:active={_activeLsp === 'ty'} onclick={() => selectLsp('ty')}>ty</button>
+  </div>
+{/if}
+
+{#if venvMenu}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="lsp-menu" style="right:{lspCtxMenu.right}px;bottom:{lspCtxMenu.bottom}px" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-    <button class:active={_activeLsp === 'basedpyright'} onclick={() => selectLsp('basedpyright')}>basedpyright</button>
-    <button class:active={_activeLsp === 'ty'} onclick={() => selectLsp('ty')}>ty</button>
+  <div
+    class="lsp-menu venv-menu"
+    style="left:{venvMenu.x}px;bottom:{venvMenu.bottom}px"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') venvMenu = null }}
+  >
+    {#each _venvMap as v}
+      <button class:active={v.pythonPath === _pythonCmd} onclick={() => pickVenv(v.pythonPath)} title={v.pythonPath}>
+        {venvLabel(v, _projectRoot)}
+      </button>
+    {/each}
+    <hr class="venv-sep" />
+    <button onclick={() => { venvMenu = null; selectPython() }}>Browse…</button>
   </div>
 {/if}
 
@@ -234,6 +313,10 @@
   .file-diag { color: var(--text-muted); font-size: 10px; }
   .ok        { color: var(--success); }
   .python-cmd { color: var(--text-secondary); }
+  .venv-caret { font-size: 9px; opacity: 0.6; }
+
+  .venv-menu { position: fixed; z-index: 9999; }
+  .venv-sep  { margin: 3px 0; border: none; border-top: 1px solid var(--border); }
 
   .lsp-status       { display: flex; align-items: center; gap: 5px; color: var(--text-muted); }
   .lsp-status.ready { color: var(--text-secondary); }

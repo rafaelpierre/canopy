@@ -8,10 +8,18 @@ export interface SetupStatus {
   message:            string
 }
 
+export interface VenvInfo {
+  subdir:     string   // abs path to directory that owns the venv
+  pythonPath: string   // abs path to python binary
+  venvPath:   string   // abs path to venv root
+  isUv:       boolean  // uv.lock present alongside
+}
+
 export const projectRoot      = writable<string | null>(null)
 export const openFilePath     = writable<string | null>(null)
 export const openTabs         = writable<string[]>([])
 export const pythonCmd        = writable<string>('python3')
+export const venvMap          = writable<VenvInfo[]>([])
 export const lspStatus        = writable<'stopped' | 'starting' | 'ready' | 'error'>('stopped')
 export const lspBusy          = writable<boolean>(false)
 export interface DiagnosticItem {

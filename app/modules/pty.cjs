@@ -1,9 +1,14 @@
 const os = require('node:os')
+const path = require('node:path')
 const pty = require('node-pty-prebuilt-multiarch')
 const { safeEnvObject } = require('../constants.cjs')
 
 // Map of tab id → pty process. Replaces the previous singleton.
 const ptyProcesses = new Map()
+// Generation counter per id — incremented each time a PTY is (re)spawned for that id.
+// Each onExit closure captures its own generation; stale exits from killed-and-replaced
+// PTYs are ignored when their generation no longer matches the current one.
+const ptyGenerations = new Map()
 
 function registerPtyHandlers(ipcMain, mainWindow) {
   ipcMain.handle('pty_spawn', (_event, args) => {
@@ -12,7 +17,11 @@ function registerPtyHandlers(ipcMain, mainWindow) {
     const { id, cwd, cols, rows } = args
     if (id === undefined || id === null) throw new Error('pty_spawn: id is required')
 
-    const safeCwd = (cwd && trustedRoot && cwd.startsWith(trustedRoot)) ? cwd : (trustedRoot || os.homedir())
+    const resolvedCwd = cwd ? path.resolve(cwd) : null
+    const safeCwd = (resolvedCwd && trustedRoot &&
+      (resolvedCwd === trustedRoot || resolvedCwd.startsWith(trustedRoot + path.sep)))
+      ? resolvedCwd
+      : (trustedRoot || os.homedir())
     const safeCols = Math.max(1, Math.min(cols || 80, 500))
     const safeRows = Math.max(1, Math.min(rows || 24, 500))
 
@@ -23,12 +32,18 @@ function registerPtyHandlers(ipcMain, mainWindow) {
       ptyProcesses.delete(id)
     }
 
+    // Bump the generation so any pending onExit from the old proc is silently dropped
+    const gen = (ptyGenerations.get(id) ?? 0) + 1
+    ptyGenerations.set(id, gen)
+
     // Read preferred shell from prefs if set, fall back to $SHELL or bash
     let shell = process.env.SHELL || '/bin/bash'
     try {
       const { getPrefs } = require('./prefs.cjs')
       const prefs = getPrefs()
-      if (prefs.preferred_shell && typeof prefs.preferred_shell === 'string') {
+      if (prefs.preferred_shell && typeof prefs.preferred_shell === 'string' &&
+          require('node:path').isAbsolute(prefs.preferred_shell) &&
+          require('node:fs').existsSync(prefs.preferred_shell)) {
         shell = prefs.preferred_shell
       }
     } catch {}
@@ -65,7 +80,10 @@ function registerPtyHandlers(ipcMain, mainWindow) {
     })
 
     proc.onExit(() => {
+      // Ignore stale exits from PTYs that were already replaced by a newer spawn
+      if (ptyGenerations.get(id) !== gen) return
       ptyProcesses.delete(id)
+      ptyGenerations.delete(id)
       if (mainWindow.isDestroyed()) return
       mainWindow.webContents.send('pty:exit', { id })
     })
@@ -96,11 +114,13 @@ function registerPtyHandlers(ipcMain, mainWindow) {
       // Kill every active PTY — SIGTERM avoids SIGHUP propagation to sibling process groups on Linux
       for (const [, proc] of ptyProcesses) { try { proc.kill('SIGTERM') } catch {} }
       ptyProcesses.clear()
+      ptyGenerations.clear()
     } else {
       const proc = ptyProcesses.get(id)
       if (proc) {
         try { proc.kill('SIGTERM') } catch {}
         ptyProcesses.delete(id)
+        ptyGenerations.delete(id)
       }
     }
   })

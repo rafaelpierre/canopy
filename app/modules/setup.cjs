@@ -158,6 +158,57 @@ function registerSetupHandlers(ipcMain) {
     }
   })
 
+  ipcMain.handle('detect_venv_recursive', async (_event, args) => {
+    const root = args?.projectRoot
+    const maxDepth = typeof args?.maxDepth === 'number' ? Math.min(args.maxDepth, 8) : 4
+    if (!root) return []
+    const { getProjectRoot } = require('./fs.cjs')
+    const trustedRoot = getProjectRoot()
+    const resolved = path.resolve(root)
+    if (trustedRoot && resolved !== trustedRoot) return []
+    const { VENV_NAMES, IGNORED_DIRS } = require('../constants.cjs')
+
+    const results = []
+    const seen = new Set()
+
+    async function walk(dir, depth) {
+      if (depth > maxDepth) return
+      let entries
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
+      const subdirs = []
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const name = entry.name
+        const fullPath = path.join(dir, name)
+        if (VENV_NAMES.includes(name)) {
+          if (seen.has(fullPath)) continue
+          seen.add(fullPath)
+          let pythonPath = null
+          for (const bin of ['python3', 'python']) {
+            const candidate = path.join(fullPath, 'bin', bin)
+            if (fs.existsSync(candidate)) { pythonPath = candidate; break }
+          }
+          if (!pythonPath) {
+            const winCandidate = path.join(fullPath, 'Scripts', 'python.exe')
+            if (fs.existsSync(winCandidate)) pythonPath = winCandidate
+          }
+          if (pythonPath) {
+            const isUv = fs.existsSync(path.join(dir, 'uv.lock'))
+            results.push({ subdir: dir, pythonPath, venvPath: fullPath, isUv })
+          }
+          continue
+        }
+        if (IGNORED_DIRS.has(name)) continue
+        subdirs.push(walk(fullPath, depth + 1))
+      }
+      await Promise.all(subdirs)
+    }
+
+    await walk(resolved, 0)
+    console.log(`[Setup] detect_venv_recursive found ${results.length} venv(s) in`, resolved)
+    return results
+  })
+
   ipcMain.handle('detect_venv', (_event, args) => {
     const root = args.projectRoot
     if (!root) return null
@@ -179,6 +230,11 @@ function registerSetupHandlers(ipcMain) {
 
   ipcMain.handle('configure_ty_python', (_event, { projectRoot, pythonPath }) => {
     if (!projectRoot || !pythonPath) return { configured: false, reason: 'missing args' }
+    const { getProjectRoot } = require('./fs.cjs')
+    const trustedRoot = getProjectRoot()
+    if (!trustedRoot || path.resolve(projectRoot) !== trustedRoot) {
+      return { configured: false, reason: 'projectRoot does not match trusted root' }
+    }
 
     const binIdx = pythonPath.lastIndexOf('/bin/')
     const scriptIdx = pythonPath.lastIndexOf(path.sep + 'Scripts' + path.sep)

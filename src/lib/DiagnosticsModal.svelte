@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
+  import { get } from 'svelte/store'
   import { diagnosticsByUri, openFilePath } from './stores'
   import type { DiagnosticItem } from './stores'
   import { basename } from './path'
@@ -28,23 +29,39 @@
   let items     = $derived(activeTab === 'errors' ? errors : warnings)
   let visibleItems = $derived(items.slice(0, visibleCount))
 
-  const unsubDiagnostics = diagnosticsByUri.subscribe((map: Map<string, DiagnosticItem[]>) => {
-    const flat: DiagnosticItem[] = []
-    for (const uriItems of map.values()) flat.push(...uriItems)
-    allItems = flat.sort((a, b) => {
-      if (a.severity !== b.severity) return b.severity - a.severity
-      if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath)
-      return a.startLineNumber - b.startLineNumber
+  let unsubDiagnostics: (() => void) | null = null
+
+  onMount(() => {
+    unsubDiagnostics = diagnosticsByUri.subscribe((map: Map<string, DiagnosticItem[]>) => {
+      if (!open) return
+      const flat: DiagnosticItem[] = []
+      for (const uriItems of map.values()) flat.push(...uriItems)
+      allItems = flat.sort((a, b) => {
+        if (a.severity !== b.severity) return b.severity - a.severity
+        if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath)
+        return a.startLineNumber - b.startLineNumber
+      })
+      selectedIndex = 0
     })
-    selectedIndex = 0
   })
-  onDestroy(unsubDiagnostics)
+
+  onDestroy(() => {
+    unsubDiagnostics?.()
+  })
 
   $effect(() => {
     if (open) {
+      const map = get(diagnosticsByUri)
+      const flat: DiagnosticItem[] = []
+      for (const uriItems of map.values()) flat.push(...uriItems)
+      allItems = flat.sort((a, b) => {
+        if (a.severity !== b.severity) return b.severity - a.severity
+        if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath)
+        return a.startLineNumber - b.startLineNumber
+      })
+      selectedIndex = 0
       // Default to errors tab if there are any, else warnings
       activeTab = errors.length > 0 ? 'errors' : 'warnings'
-      selectedIndex = 0
       visibleCount = 20
       refreshFileLines()
       requestAnimationFrame(() => listEl?.focus())
@@ -86,9 +103,7 @@
   function clickItem(item: DiagnosticItem, i: number) {
     selectedIndex = i
     onClose()
-    let currentFile: string | null = null
-    const unsub = openFilePath.subscribe(v => { currentFile = v })
-    unsub()
+    const currentFile = get(openFilePath)
     if (item.filePath !== currentFile) {
       openFilePath.set(item.filePath)
       setTimeout(() => onRevealLine(item.startLineNumber), 120)
@@ -134,12 +149,13 @@
     class="dm"
     role="dialog"
     aria-modal="true"
+    aria-labelledby="dm-title"
     tabindex="-1"
     bind:this={listEl}
     onkeydown={onKeydown}
   >
     <div class="dm-header">
-      <span class="dm-title">Diagnostics</span>
+      <span id="dm-title" class="dm-title">Diagnostics</span>
     </div>
 
     <div class="dm-tabs">

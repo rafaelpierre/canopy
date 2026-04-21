@@ -72,33 +72,32 @@ function createWindow() {
     registerPrefsHandlers(ipcMain)
     registerSetupHandlers(ipcMain)
 
-    ipcMain.handle('window_minimize', () => mainWindow?.minimize())
+    ipcMain.handle('window_minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
     ipcMain.handle('window_maximize', () => {
-      if (mainWindow?.isMaximized()) mainWindow.unmaximize()
-      else mainWindow?.maximize()
+      const w = BrowserWindow.getFocusedWindow()
+      w?.isMaximized() ? w.unmaximize() : w?.maximize()
     })
     ipcMain.handle('window_close', () => {
       if (!quitPending) {
         quitPending = true
-        mainWindow?.webContents?.send('app:before-quit')
+        BrowserWindow.getFocusedWindow()?.webContents?.send('app:before-quit')
       }
     })
 
-    app.on('before-quit', () => killAllPtys())
-
-    // Intercept Cmd+Q / app.quit() — registered once, references mainWindow via closure
+    // Intercept Cmd+Q / app.quit() — registered once
     app.on('before-quit', (e) => {
       if (forceQuit) return
       e.preventDefault()
       if (!quitPending) {
         quitPending = true
-        mainWindow?.webContents?.send('app:before-quit')
+        BrowserWindow.getAllWindows()[0]?.webContents?.send('app:before-quit')
       }
     })
 
     ipcMain.handle('app:confirm-quit', () => {
+      killAllPtys()
       forceQuit = true
-      mainWindow.destroy()
+      BrowserWindow.getAllWindows()[0]?.destroy()
     })
     ipcMain.handle('app:cancel-quit', () => {
       quitPending = false
@@ -181,7 +180,7 @@ const CSP = "default-src 'self' app:; script-src 'self' app: 'unsafe-inline' 'wa
 app.whenReady().then(() => {
   const buildDir = path.join(__dirname, '..', 'build')
 
-  const handleAppProtocol = (request) => {
+  const handleAppProtocol = async (request) => {
     const requestUrl = new URL(request.url)
     let pathname = decodeURIComponent(requestUrl.pathname)
     // SPA: serve index.html for any path without a file extension
@@ -205,7 +204,7 @@ app.whenReady().then(() => {
       : 'no-cache'
 
     try {
-      const data = fs.readFileSync(filePath)
+      const data = await fs.promises.readFile(filePath)
       const ext = path.extname(filePath).toLowerCase()
       const mimeType = MIME_TYPES[ext] || 'application/octet-stream'
       return new Response(data, {
@@ -218,7 +217,7 @@ app.whenReady().then(() => {
     } catch (e) {
       // Fallback to index.html for SPA routing
       try {
-        const data = fs.readFileSync(path.join(buildDir, 'index.html'))
+        const data = await fs.promises.readFile(path.join(buildDir, 'index.html'))
         return new Response(data, {
           headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' },
         })

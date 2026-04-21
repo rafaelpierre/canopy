@@ -92,7 +92,7 @@
     {#each Object.entries(MENUS) as [name, items]}
       <div class="menu-root" class:active={openMenu === name}>
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <button class="menu-btn" role="menuitem" tabindex="0" onclick={(e) => toggleMenu(name, e)}>
+        <button class="menu-btn" role="menuitem" tabindex="0" aria-haspopup="menu" aria-expanded={openMenu === name} onclick={(e) => toggleMenu(name, e)}>
           {name}
         </button>
         {#if openMenu === name}

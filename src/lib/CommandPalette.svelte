@@ -48,6 +48,7 @@
 
   // --- State ---
   let inputEl: HTMLInputElement | undefined = $state(undefined)
+  let previousFocus: HTMLElement | null = null
   let query = $state('')
   let selectedIndex = $state(0)
   let activeCommand: SlashCommand | null = $state(null)
@@ -115,6 +116,7 @@
   // --- Reactivity: reset state when palette opens/closes ---
   $effect(() => {
     if (open) {
+      previousFocus = document.activeElement as HTMLElement | null
       query = ''
       paramQuery = ''
       activeCommand = null
@@ -126,11 +128,13 @@
       if (mode === 'command') query = '/'
       requestAnimationFrame(() => {
         inputEl?.focus()
-        // Place cursor after "/" in command mode
         if (mode === 'command' && inputEl) {
           inputEl.setSelectionRange(1, 1)
         }
       })
+    } else {
+      previousFocus?.focus()
+      previousFocus = null
     }
   })
 
@@ -383,8 +387,9 @@
     {seg.before}<mark class="cp-hl">{seg.match}</mark>{seg.after}
   {/snippet}
 
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div role="presentation" class="cp-bg" onclick={handleBgClick}></div>
-  <div class="cp">
+  <div class="cp" role="dialog" aria-modal="true" aria-label="Command palette">
     <!-- Input area -->
     <div class="cp-input-row">
       {#if activeCommand}
@@ -392,8 +397,15 @@
       {/if}
       <input
         bind:this={inputEl}
+        id="cp-input"
         class="cp-input selectable"
         type="text"
+        role="combobox"
+        aria-label={activeCommand ? (activeCommand.paramHint ?? 'Command parameters') : mode === 'command' ? 'Command palette' : 'Go to file'}
+        aria-autocomplete="list"
+        aria-controls="cp-list"
+        aria-expanded={listLength > 0}
+        aria-activedescendant={listLength > 0 ? `cp-item-${selectedIndex}` : undefined}
         placeholder={activeCommand ? (activeCommand.paramHint ?? 'type params…') : mode === 'command' ? 'Type / for commands…' : 'Go to file…'}
         value={activeCommand ? paramQuery : query}
         oninput={onInput}
@@ -402,11 +414,11 @@
     </div>
 
     <!-- Results list -->
-    <div class="cp-list">
+    <div id="cp-list" class="cp-list" role="listbox">
       {#if visibleList === 'commands'}
         {#each filteredCommands as cmd, i}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div role="button" tabindex="-1" class="cp-item" class:sel={i === selectedIndex} onclick={() => clickCommand(cmd)}>
+          <div id="cp-item-{i}" role="option" aria-selected={i === selectedIndex} tabindex="-1" class="cp-item" class:sel={i === selectedIndex} onclick={() => clickCommand(cmd)}>
             <span class="cp-cmd-name">{cmd.label}</span>
             <span class="cp-cmd-desc">{cmd.description}</span>
           </div>
@@ -414,7 +426,7 @@
       {:else if visibleList === 'files'}
         {#each fileResults as file, i}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div role="button" tabindex="-1" class="cp-item" class:sel={i === selectedIndex} onclick={() => clickFile(file)}>
+          <div id="cp-item-{i}" role="option" aria-selected={i === selectedIndex} tabindex="-1" class="cp-item" class:sel={i === selectedIndex} onclick={() => clickFile(file)}>
             <span class="cp-file-name">{basename(file)}</span>
             <span class="cp-file-dir">{relpath(file, projectRoot ?? '')}</span>
           </div>
@@ -427,7 +439,7 @@
         {/if}
         {#each grepResults as result, i}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div role="button" tabindex="-1" class="cp-hit" class:sel={i === selectedIndex} onclick={() => clickGrepResult(result)}>
+          <div id="cp-item-{i}" role="option" aria-selected={i === selectedIndex} tabindex="-1" class="cp-hit" class:sel={i === selectedIndex} onclick={() => clickGrepResult(result)}>
             <div class="cp-hit-excerpt">
               <span class="cp-hit-line-num">{result.line}</span>
               <span class="cp-hit-code">{@render highlightedCode(result.text.trim())}</span>
@@ -446,7 +458,7 @@
       {:else if visibleList === 'filehits'}
         {#each fileHits as hit, i}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div role="button" tabindex="-1" class="cp-hit" class:sel={i === selectedIndex} onclick={() => clickFileHit(hit)}>
+          <div id="cp-item-{i}" role="option" aria-selected={i === selectedIndex} tabindex="-1" class="cp-hit" class:sel={i === selectedIndex} onclick={() => clickFileHit(hit)}>
             <div class="cp-hit-excerpt">
               <span class="cp-hit-line-num">{hit.line}</span>
               <span class="cp-hit-code">{@render highlightedCode(hit.text.trim())}</span>

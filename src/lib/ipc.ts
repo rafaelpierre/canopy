@@ -27,7 +27,7 @@ export async function openFolderDialog(options?: {
   multiple?: boolean
   title?: string
 }): Promise<string | null> {
-  return api.openFolderDialog()
+  return invoke('dialog:openFolder')
 }
 
 export async function openFileDialog(options?: {

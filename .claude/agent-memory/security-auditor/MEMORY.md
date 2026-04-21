@@ -1,0 +1,1 @@
+- [Security Audit — Canopy April 2026 (Full)](project_security_audit_april2026.md) — Full audit results: 3 Medium, 4 Low/Info; verified prior hardening controls still in place

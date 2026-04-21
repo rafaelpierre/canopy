@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { Terminal }           from '@xterm/xterm'
   import { FitAddon }           from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
@@ -103,6 +103,37 @@
     }
   }
 
+  function menuFocus(node: HTMLElement) {
+    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+    return {}
+  }
+
+  function handleMenuKeydown(e: KeyboardEvent, closeMenu: () => void) {
+    e.stopPropagation()
+    if (e.key === 'Escape') { closeMenu(); return }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      const idx = items.indexOf(document.activeElement as HTMLElement)
+      const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
+      items[Math.max(0, next)]?.focus()
+    }
+  }
+
+  function onTabsKeydown(e: KeyboardEvent) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    const idx = tabs.findIndex(t => t.id === activeTab)
+    if (idx === -1) return
+    e.preventDefault()
+    const nextIdx = e.key === 'ArrowRight'
+      ? Math.min(idx + 1, tabs.length - 1)
+      : Math.max(idx - 1, 0)
+    switchToTab(tabs[nextIdx].id)
+    tick().then(() => {
+      (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus()
+    })
+  }
+
   function onTermTabContextMenu(e: MouseEvent, id: number) {
     e.preventDefault()
     e.stopPropagation()
@@ -119,9 +150,11 @@
   }
 
   function killTab(tab: TermTab) {
+    tab.main.spawned = false
     tab.main.term.dispose()
     invoke?.('pty_kill', { id: tab.main.id }).catch(() => {})
     if (tab.split) {
+      tab.split.spawned = false
       tab.split.term.dispose()
       invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
     }
@@ -181,6 +214,7 @@
   function closeSplit(tabId: number) {
     const tab = tabs.find(t => t.id === tabId)
     if (!tab?.split) return
+    tab.split.spawned = false
     tab.split.term.dispose()
     invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
     tab.split = undefined
@@ -254,7 +288,7 @@
           tab.main.term.write(bytes)
           const cwd = parseOsc7(bytes)
           if (cwd) {
-            const cwdName = cwd.split('/').pop() || cwd
+            const cwdName = (cwd.split('/').pop() || cwd).replace(/[^\x20-\x7E -￿]/g, '')
             tab.title = shellBasename(preferredShell) ? `${shellBasename(preferredShell)}: ${cwdName}` : cwdName
             tabs = [...tabs]
           }
@@ -284,13 +318,18 @@
     }).then((u: any) => cleanups.push(u))
 
     // Resize observer — refit active terminal(s) when container resizes
+    let _resizeTimer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
       const t = tabs.find(t => t.id === activeTab)
       if (!t) return
-      t.main.fit.fit()
-      t.split?.fit.fit()
-      if (t.main.spawned) invoke('pty_resize', { id: t.main.id, cols: t.main.term.cols, rows: t.main.term.rows }).catch(() => {})
-      if (t.split?.spawned) invoke('pty_resize', { id: t.split.id, cols: t.split.term.cols, rows: t.split.term.rows }).catch(() => {})
+      if (_resizeTimer) clearTimeout(_resizeTimer)
+      _resizeTimer = setTimeout(() => {
+        _resizeTimer = null
+        t.main.fit.fit()
+        t.split?.fit.fit()
+        if (t.main.spawned) invoke('pty_resize', { id: t.main.id, cols: t.main.term.cols, rows: t.main.term.rows }).catch(() => {})
+        if (t.split?.spawned) invoke('pty_resize', { id: t.split.id, cols: t.split.term.cols, rows: t.split.term.rows }).catch(() => {})
+      }, 50)
     })
     ro.observe(containerEl)
     cleanups.push(() => ro.disconnect())
@@ -343,24 +382,48 @@
 </script>
 
 {#if termCtxMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="term-ctx-menu" style="left:{termCtxMenu.x}px;top:{termCtxMenu.y}px" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-    <button onclick={() => { closeTab(termCtxMenu!.id); termCtxMenu = null }}>Close</button>
-    <button onclick={() => { closeOtherTermTabs(termCtxMenu!.id); termCtxMenu = null }}>Close Others</button>
+  <div
+    class="term-ctx-menu"
+    role="menu"
+    tabindex="-1"
+    style="left:{termCtxMenu.x}px;top:{termCtxMenu.y}px"
+    use:menuFocus
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => handleMenuKeydown(e, () => { termCtxMenu = null })}
+  >
+    <button role="menuitem" onclick={() => { closeTab(termCtxMenu!.id); termCtxMenu = null }}>Close</button>
+    <button role="menuitem" onclick={() => { closeOtherTermTabs(termCtxMenu!.id); termCtxMenu = null }}>Close Others</button>
     {#if tabs.find(t => t.id === termCtxMenu!.id)?.split}
-      <button onclick={() => { closeSplit(termCtxMenu!.id); termCtxMenu = null }}>Unsplit</button>
+      <button role="menuitem" onclick={() => { closeSplit(termCtxMenu!.id); termCtxMenu = null }}>Unsplit</button>
     {:else}
-      <button onclick={() => { splitTab(termCtxMenu!.id); termCtxMenu = null }}>Split</button>
+      <button role="menuitem" onclick={() => { splitTab(termCtxMenu!.id); termCtxMenu = null }}>Split</button>
     {/if}
   </div>
 {/if}
 
 {#if showShellPicker}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="shell-picker" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+  <div
+    class="shell-picker"
+    role="listbox"
+    aria-label="Select shell"
+    tabindex="-1"
+    use:menuFocus
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => {
+      e.stopPropagation()
+      if (e.key === 'Escape') { showShellPicker = false; return }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('button'))
+        const idx = items.indexOf(document.activeElement as HTMLElement)
+        const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
+        items[Math.max(0, next)]?.focus()
+      }
+    }}
+  >
     <div class="shell-picker-title">Select Shell</div>
     {#each availableShells as sh}
-      <button class="shell-option" class:active={sh === preferredShell} onclick={() => selectShell(sh)}>
+      <button role="option" aria-selected={sh === preferredShell} class="shell-option" class:active={sh === preferredShell} onclick={() => selectShell(sh)}>
         {sh}
       </button>
     {/each}
@@ -372,12 +435,21 @@
 
 <div class="terminal-container selectable" bind:this={containerEl}>
   <div class="terminal-toolbar">
-    <div class="term-tabs">
-      {#each tabs as tab}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div role="tab" tabindex="0" class="term-tab" class:active={tab.id === activeTab} onclick={() => switchToTab(tab.id)} oncontextmenu={(e) => onTermTabContextMenu(e, tab.id)}>
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <div class="term-tabs" role="tablist" onkeydown={onTabsKeydown}>
+      {#each tabs as tab (tab.id)}
+        <div
+          role="tab"
+          tabindex={tab.id === activeTab ? 0 : -1}
+          aria-selected={tab.id === activeTab}
+          class="term-tab"
+          class:active={tab.id === activeTab}
+          onclick={() => switchToTab(tab.id)}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchToTab(tab.id) } }}
+          oncontextmenu={(e) => onTermTabContextMenu(e, tab.id)}
+        >
           <span class="term-tab-name">{tab.title || 'shell'}</span>
-          <button class="term-tab-close" onclick={(e) => closeTab(tab.id, e)}>×</button>
+          <button class="term-tab-close" aria-label="Close {tab.title || 'shell'} terminal tab" onclick={(e) => closeTab(tab.id, e)}>×</button>
         </div>
       {/each}
       <button class="term-tab-add" onclick={addTab} title="New terminal tab">+</button>
@@ -396,7 +468,7 @@
     </div>
   </div>
   <div class="xterm-panels">
-    {#each tabs as tab}
+    {#each tabs as tab (tab.id)}
       <div class="xterm-pane-group" class:hidden={tab.id !== activeTab} class:split={!!tab.split}>
         <div
           role="presentation"

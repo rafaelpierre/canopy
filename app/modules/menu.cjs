@@ -70,7 +70,7 @@ function buildMenu(mainWindow) {
         { role: 'front' },
       ],
     },
-    ...(!app.isPackaged ? [{ label: 'Debug', submenu: [{ role: 'toggleDevTools' }] }] : []),
+    ...(!app.isPackaged ? [{ label: 'Debug', submenu: [{ role: 'toggleDevTools', accelerator: 'CommandOrControl+Shift+I' }] }] : []),
   ]
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))

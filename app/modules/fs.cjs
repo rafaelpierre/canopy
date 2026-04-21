@@ -1,5 +1,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const { execFileSync } = require('node:child_process')
+const { safeEnvObject } = require('../constants.cjs')
 
 let projectRoot = null
 
@@ -88,13 +90,14 @@ async function grepFiles(dir, query, glob, results, depth) {
   let entries
   try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
 
+  const subdirs = []
   for (const entry of entries) {
     if (IGNORED.has(entry.name)) continue
     if (results.length >= 100) return
     const full = path.join(dir, entry.name)
 
     if (entry.isDirectory()) {
-      await grepFiles(full, query, glob, results, depth + 1)
+      subdirs.push(grepFiles(full, query, glob, results, depth + 1))
     } else {
       // Apply glob filter (simple extension match: "*.py", "*.{js,ts}")
       if (glob) {
@@ -120,6 +123,7 @@ async function grepFiles(dir, query, glob, results, depth) {
       }
     }
   }
+  if (subdirs.length > 0) await Promise.all(subdirs)
 }
 
 // Map of absolute path → { watcher, debounce }
@@ -183,10 +187,13 @@ function registerFsHandlers(ipcMain, mainWindow) {
 
   ipcMain.handle('read_file_content', async (_event, args) => {
     const safePath = validatePath(args.path)
+    const stat = await fs.promises.stat(safePath)
+    if (stat.size > 10 * 1024 * 1024) throw new Error('File too large to open in editor (>10 MB)')
     return await fs.promises.readFile(safePath, 'utf-8')
   })
 
   ipcMain.handle('write_file_content', async (_event, args) => {
+    if (typeof args.content !== 'string' || args.content.length > 20_000_000) throw new Error('Content too large')
     const safePath = validatePath(args.path)
     await fs.promises.writeFile(safePath, args.content)
     lastWrittenContent.set(safePath, args.content)
@@ -206,20 +213,30 @@ function registerFsHandlers(ipcMain, mainWindow) {
     return results
   })
 
-  // Watch the entire project root for file system changes (tree auto-refresh)
+  // Watch the entire project root for file system changes (tree auto-refresh + LSP file watching)
   let projectDirWatcher = null
   let projectDirDebounce = null
+  let lastWatchedFile = null
   ipcMain.handle('watch_project', (_event, args) => {
     if (projectDirWatcher) { try { projectDirWatcher.close() } catch {} projectDirWatcher = null }
     if (!args?.root) return
     let safePath
     try { safePath = validatePath(args.root) } catch { return }
     try {
-      projectDirWatcher = fs.watch(safePath, { persistent: false, recursive: true }, () => {
+      projectDirWatcher = fs.watch(safePath, { persistent: false, recursive: true }, (eventType, filename) => {
+        if (filename) lastWatchedFile = { eventType, filename }
         if (projectDirDebounce) clearTimeout(projectDirDebounce)
         projectDirDebounce = setTimeout(() => {
           projectDirDebounce = null
           mainWindow?.webContents?.send('dir:changed', { root: safePath })
+          if (lastWatchedFile) {
+            const { eventType: et, filename: fn } = lastWatchedFile
+            lastWatchedFile = null
+            const fullPath = path.join(safePath, fn)
+            let type = 2 // changed
+            if (et === 'rename') type = fs.existsSync(fullPath) ? 1 : 3 // created or deleted
+            mainWindow?.webContents?.send('lsp:watched-files-changed', [{ uri: 'file://' + fullPath, type }])
+          }
         }, 300)
       })
       projectDirWatcher.on('error', () => { projectDirWatcher = null })
@@ -255,31 +272,107 @@ function registerFsHandlers(ipcMain, mainWindow) {
     await fs.promises.rename(safeSrc, safeDst)
   })
 
-  // Watch the project root directory for .venv creation.
-  // Fires 'venv:created' when a known venv directory appears.
+  // Watch for .venv creation at any depth (recursive=true) or just the root dir.
+  // Fires 'venv:created' once per venv when a python binary becomes available.
   let venvDirWatcher = null
+  // Track venv paths already reported so rapid file events don't spam the renderer.
+  const venvCreatedSent = new Set()
   ipcMain.handle('watch_for_venv', (_event, args) => {
     if (venvDirWatcher) { try { venvDirWatcher.close() } catch {} venvDirWatcher = null }
+    venvCreatedSent.clear()
     if (!args?.root) return
     const { VENV_NAMES } = require('../constants.cjs')
+    const recursive = args.recursive === true
     let safePath
-    try { safePath = validatePath(args.root) } catch { return }
+    try { safePath = validatePath(args.root) } catch (e) {
+      console.warn('[FS] watch_for_venv validatePath failed:', e?.message)
+      return
+    }
+    console.log('[FS] watch_for_venv started on', safePath, recursive ? '(recursive)' : '')
     try {
-      venvDirWatcher = fs.watch(safePath, { persistent: false }, (_evt, filename) => {
-        if (!filename || !VENV_NAMES.includes(filename)) return
-        const venvPath = path.join(safePath, filename)
-        if (!fs.existsSync(venvPath)) return
-        // Find a python binary inside it
-        for (const bin of ['python', 'python3']) {
-          const pythonBin = path.join(venvPath, 'bin', bin)
-          if (fs.existsSync(pythonBin)) {
-            mainWindow?.webContents?.send('venv:created', { root: safePath, pythonPath: pythonBin })
-            return
+      venvDirWatcher = fs.watch(safePath, { persistent: false, recursive }, (_evt, filename) => {
+        if (!filename) return
+        ;(async () => {
+          // Normalize separator — macOS uses '/' even when path.sep is '/'
+          const parts = filename.split(/[\\/]/)
+          const venvIdx = parts.findIndex(p => VENV_NAMES.includes(p))
+          if (venvIdx === -1) return
+          const venvAbsPath = path.join(safePath, ...parts.slice(0, venvIdx + 1))
+          if (venvCreatedSent.has(venvAbsPath)) return  // already reported this venv
+          const ownerDir = recursive ? path.dirname(venvAbsPath) : safePath
+          for (const bin of ['python3', 'python']) {
+            const pythonBin = path.join(venvAbsPath, 'bin', bin)
+            try {
+              await fs.promises.access(pythonBin)
+              console.log('[FS] venv:created ->', pythonBin)
+              venvCreatedSent.add(venvAbsPath)
+              mainWindow?.webContents?.send('venv:created', { root: ownerDir, pythonPath: pythonBin, venvPath: venvAbsPath })
+              return
+            } catch {}
           }
-        }
+          const winBin = path.join(venvAbsPath, 'Scripts', 'python.exe')
+          try {
+            await fs.promises.access(winBin)
+            console.log('[FS] venv:created (win) ->', winBin)
+            venvCreatedSent.add(venvAbsPath)
+            mainWindow?.webContents?.send('venv:created', { root: ownerDir, pythonPath: winBin, venvPath: venvAbsPath })
+          } catch {}
+        })()
       })
-      venvDirWatcher.on('error', () => { venvDirWatcher = null })
-    } catch {}
+      venvDirWatcher.on('error', (e) => {
+        console.warn('[FS] venvDirWatcher error:', e?.message)
+        venvDirWatcher = null
+      })
+    } catch (e) {
+      console.warn('[FS] watch_for_venv fs.watch failed:', e?.message)
+    }
+  })
+
+  // Return all non-empty absolute entries in sys.path for the given Python interpreter.
+  // Python binaries live outside the project root so we validate by existence, not root membership.
+  ipcMain.handle('get_python_paths', async (_event, args) => {
+    const pythonBin = args?.pythonPath
+    if (typeof pythonBin !== 'string' || !path.isAbsolute(pythonBin)) return []
+    try { if (!fs.statSync(pythonBin).isFile()) return [] } catch { return [] }
+    try {
+      const out = execFileSync(
+        pythonBin,
+        ['-c', 'import sys,json;print(json.dumps([p for p in sys.path if p]))'],
+        { timeout: 5000, env: safeEnvObject({}) },
+      )
+      const paths = JSON.parse(out.toString().trim())
+      return Array.isArray(paths)
+        ? paths.filter(p => typeof p === 'string' && path.isAbsolute(p))
+        : []
+    } catch { return [] }
+  })
+
+  // List a directory that's known to be under one of the caller's Python search paths.
+  // The caller passes the roots it received from get_python_paths; we re-validate here.
+  ipcMain.handle('list_python_dir', async (_event, args) => {
+    const { dirPath, roots } = args || {}
+    if (typeof dirPath !== 'string' || !path.isAbsolute(dirPath)) return []
+    if (!Array.isArray(roots) || roots.length === 0) return []
+    const resolved = path.resolve(dirPath)
+    const allowed = roots.some(r => {
+      if (typeof r !== 'string' || !path.isAbsolute(r)) return false
+      const nr = path.resolve(r)
+      return resolved === nr || resolved.startsWith(nr + path.sep)
+    })
+    if (!allowed) return []
+    try {
+      const entries = await fs.promises.readdir(resolved, { withFileTypes: true })
+      return entries.map(e => ({ name: e.name, is_dir: e.isDirectory() }))
+    } catch { return [] }
+  })
+
+  // List a single directory within the project root (used for relative import completion).
+  ipcMain.handle('list_dir', async (_event, args) => {
+    const safePath = validatePath(args.path)
+    try {
+      const entries = await fs.promises.readdir(safePath, { withFileTypes: true })
+      return entries.map(e => ({ name: e.name, is_dir: e.isDirectory() }))
+    } catch { return [] }
   })
 }
 
