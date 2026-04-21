@@ -20,4 +20,4 @@ dist-electron/
 Users/
 
 # Claude Code
-.claude/settings.json
+.claude

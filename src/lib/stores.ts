@@ -47,6 +47,21 @@ export const diagnostics      = derived(
   },
   { errors: 0, warnings: 0 },
 )
+
+export const diagnosticFileSets = derived(
+  diagnosticsByUri,
+  ($map) => {
+    const errorPaths   = new Set<string>()
+    const warningPaths = new Set<string>()
+    for (const items of $map.values())
+      for (const item of items) {
+        if (item.severity === 8) errorPaths.add(item.filePath)
+        else if (item.severity === 4) warningPaths.add(item.filePath)
+      }
+    return { errorPaths, warningPaths }
+  },
+  { errorPaths: new Set<string>(), warningPaths: new Set<string>() },
+)
 export const showDiagnosticsModal  = writable<boolean>(false)
 export const showTerminal     = writable<boolean>(true)
 export const showFileTree     = writable<boolean>(true)

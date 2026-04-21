@@ -2,23 +2,8 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import ChevronRightIcon from 'lucide-svelte/icons/chevron-right'
   import ChevronDownIcon  from 'lucide-svelte/icons/chevron-down'
-  import FolderIcon from 'lucide-svelte/icons/folder'
-  import FolderOpenIcon from 'lucide-svelte/icons/folder-open'
-  import FileTextIcon from 'lucide-svelte/icons/file-text'
-  import FileCodeIcon from 'lucide-svelte/icons/file-code'
-  import SettingsIcon from 'lucide-svelte/icons/settings'
-  import BookOpenIcon from 'lucide-svelte/icons/book-open'
-  import LockIcon from 'lucide-svelte/icons/lock'
-  import TerminalIcon from 'lucide-svelte/icons/terminal-square'
-  import BoxIcon from 'lucide-svelte/icons/box'
-  import GitBranchIcon from 'lucide-svelte/icons/git-branch'
-  import KeyIcon from 'lucide-svelte/icons/key'
-  import ImageIcon from 'lucide-svelte/icons/image'
-  import DatabaseIcon from 'lucide-svelte/icons/database'
-  import GlobeIcon from 'lucide-svelte/icons/globe'
-  import CopyrightIcon from 'lucide-svelte/icons/copyright'
-  import FileIcon from 'lucide-svelte/icons/file'
-  import BracesIcon from 'lucide-svelte/icons/braces'
+  import { fileIcon, fileColor } from './file-icons'
+  import { menuFocus, handleMenuKeydown as _handleMenuKeydown } from './menu-utils'
 
   interface FileEntry {
     name:      string
@@ -180,17 +165,9 @@
       if (loadedRoot) { loadTree(loadedRoot); loadGitignore(loadedRoot) }
     }))
 
-    cleanups.push(stores.diagnosticsByUri.subscribe((map: Map<string, any[]>) => {
-      const errors   = new Set<string>()
-      const warnings = new Set<string>()
-      for (const [, items] of map) {
-        for (const item of items) {
-          if (item.severity === 8) errors.add(item.filePath)
-          else if (item.severity === 4) warnings.add(item.filePath)
-        }
-      }
-      errorPaths   = errors
-      warningPaths = warnings
+    cleanups.push(stores.diagnosticFileSets.subscribe(({ errorPaths: e, warningPaths: w }: { errorPaths: Set<string>, warningPaths: Set<string> }) => {
+      errorPaths   = e
+      warningPaths = w
     }))
 
     window.addEventListener('click', closeCtxMenu)
@@ -391,67 +368,20 @@
     renamingPath = null; renameValue = ''
   }
 
-  // ─── Icon helpers ──────────────────────────────────────────────────────────
-
-  type IconComponent = typeof FileIcon
-
-  function fileIconComponent(entry: FlatEntry): IconComponent {
-    if (entry.is_dir) return entry.expanded ? FolderOpenIcon : FolderIcon
-    const ext  = entry.name.split('.').pop()?.toLowerCase() ?? ''
-    const name = entry.name.toLowerCase()
-    if (ext === 'py' || name === '.python-version') return FileCodeIcon
-    if (name === 'dockerfile' || name.startsWith('docker') || name === '.dockerignore') return BoxIcon
-    if (name.includes('lock')) return LockIcon
-    if (ext === 'toml' || ext === 'ini' || ext === 'cfg' || ext === 'conf' || ext === 'yaml' || ext === 'yml') return SettingsIcon
-    if (ext === 'json') return BracesIcon
-    if (ext === 'md' || ext === 'rst') return BookOpenIcon
-    if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || name === 'makefile' || name === 'justfile') return TerminalIcon
-    if (name === '.gitignore' || name === '.gitattributes') return GitBranchIcon
-    if (name === '.env' || name.startsWith('.env.')) return KeyIcon
-    if (name === 'license' || name === 'licence') return CopyrightIcon
-    if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'svg' || ext === 'ico') return ImageIcon
-    if (ext === 'csv' || ext === 'parquet' || ext === 'sql') return DatabaseIcon
-    if (ext === 'html' || ext === 'css' || ext === 'js' || ext === 'ts' || ext === 'xml') return GlobeIcon
-    if (ext === 'txt') return FileTextIcon
-    return FileIcon
+  function fileIconComponent(entry: FlatEntry) {
+    return fileIcon(entry.name, entry.is_dir, entry.expanded)
   }
 
   function iconColor(entry: FlatEntry, ignored: boolean): string {
-    if (ignored) return 'var(--text-muted)'
-    if (entry.is_dir) return 'var(--text-secondary)'
-    const ext  = entry.name.split('.').pop()?.toLowerCase() ?? ''
-    const name = entry.name.toLowerCase()
-    if (ext === 'py' || name === '.python-version') return '#e5c07b'
-    if (name === 'dockerfile' || name.startsWith('docker')) return '#61afef'
-    if (name.includes('lock')) return '#7a7a7a'
-    if (ext === 'toml' || ext === 'ini' || ext === 'cfg' || ext === 'conf') return '#7a7a7a'
-    if (ext === 'yaml' || ext === 'yml') return '#e06c75'
-    if (ext === 'json') return '#e5c07b'
-    if (ext === 'md' || ext === 'rst') return '#61afef'
-    if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return '#98c379'
-    if (name === '.gitignore' || name === '.gitattributes') return '#e06c75'
-    return 'var(--text-muted)'
+    return fileColor(entry.name, entry.is_dir, ignored)
   }
 
   // Chevron size is slightly smaller than the file icon
   let iconSize:    number = $derived(Math.round(fontSize * 1.0))
   let chevronSize: number = $derived(Math.max(12, Math.round(fontSize * 0.92)))
 
-  function menuFocus(node: HTMLElement) {
-    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
-    return {}
-  }
-
   function handleCtxMenuKeydown(e: KeyboardEvent) {
-    e.stopPropagation()
-    if (e.key === 'Escape') { closeCtxMenu(); return }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault()
-      const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'))
-      const idx = items.indexOf(document.activeElement as HTMLElement)
-      const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
-      items[Math.max(0, next)]?.focus()
-    }
+    _handleMenuKeydown(e, closeCtxMenu)
   }
 </script>
 

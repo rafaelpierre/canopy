@@ -11,21 +11,8 @@
   import DiagnosticsModal    from '$lib/DiagnosticsModal.svelte'
   import SaveDialog          from '$lib/SaveDialog.svelte'
   import type { SaveDialogType } from '$lib/SaveDialog.svelte'
-  import FileCodeIcon  from 'lucide-svelte/icons/file-code'
-  import BoxIcon       from 'lucide-svelte/icons/box'
-  import LockIcon      from 'lucide-svelte/icons/lock'
-  import SettingsIcon  from 'lucide-svelte/icons/settings'
-  import BracesIcon    from 'lucide-svelte/icons/braces'
-  import BookOpenIcon  from 'lucide-svelte/icons/book-open'
-  import TerminalIcon  from 'lucide-svelte/icons/terminal-square'
-  import GitBranchIcon from 'lucide-svelte/icons/git-branch'
-  import KeyIcon       from 'lucide-svelte/icons/key'
-  import CopyrightIcon from 'lucide-svelte/icons/copyright'
-  import ImageIcon     from 'lucide-svelte/icons/image'
-  import DatabaseIcon  from 'lucide-svelte/icons/database'
-  import GlobeIcon     from 'lucide-svelte/icons/globe'
-  import FileTextIcon  from 'lucide-svelte/icons/file-text'
-  import FileIcon      from 'lucide-svelte/icons/file'
+  import { fileIcon as _fileIcon, fileColor as _fileColor } from '$lib/file-icons'
+  import { menuFocus, handleMenuKeydown as _handleMenuKeydown } from '$lib/menu-utils'
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
 
@@ -43,57 +30,12 @@
     })
   }
 
-  function menuFocus(node: HTMLElement) {
-    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
-    return {}
-  }
-
   function handleMenuKeydown(e: KeyboardEvent, closeMenu: () => void) {
-    e.stopPropagation()
-    if (e.key === 'Escape') { closeMenu(); return }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault()
-      const items = Array.from((e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'))
-      const idx = items.indexOf(document.activeElement as HTMLElement)
-      const next = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0)
-      items[Math.max(0, next)]?.focus()
-    }
+    _handleMenuKeydown(e, closeMenu)
   }
 
-  function tabIconComponent(name: string) {
-    const ext = name.split('.').pop()?.toLowerCase() ?? ''
-    const low = name.toLowerCase()
-    if (ext === 'py' || low === '.python-version') return FileCodeIcon
-    if (low === 'dockerfile' || low.startsWith('docker') || low === '.dockerignore') return BoxIcon
-    if (low.includes('lock')) return LockIcon
-    if (ext === 'toml' || ext === 'ini' || ext === 'cfg' || ext === 'conf' || ext === 'yaml' || ext === 'yml') return SettingsIcon
-    if (ext === 'json') return BracesIcon
-    if (ext === 'md' || ext === 'rst') return BookOpenIcon
-    if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || low === 'makefile' || low === 'justfile') return TerminalIcon
-    if (low === '.gitignore' || low === '.gitattributes') return GitBranchIcon
-    if (low === '.env' || low.startsWith('.env.')) return KeyIcon
-    if (low === 'license' || low === 'licence') return CopyrightIcon
-    if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'svg' || ext === 'ico') return ImageIcon
-    if (ext === 'csv' || ext === 'parquet' || ext === 'sql') return DatabaseIcon
-    if (ext === 'html' || ext === 'css' || ext === 'js' || ext === 'ts' || ext === 'xml') return GlobeIcon
-    if (ext === 'txt') return FileTextIcon
-    return FileIcon
-  }
-
-  function tabIconColor(name: string): string {
-    const ext = name.split('.').pop()?.toLowerCase() ?? ''
-    const low = name.toLowerCase()
-    if (ext === 'py' || low === '.python-version') return '#e5c07b'
-    if (low === 'dockerfile' || low.startsWith('docker')) return '#61afef'
-    if (low.includes('lock')) return '#7a7a7a'
-    if (ext === 'toml' || ext === 'ini' || ext === 'cfg' || ext === 'conf') return '#7a7a7a'
-    if (ext === 'yaml' || ext === 'yml') return '#e06c75'
-    if (ext === 'json') return '#e5c07b'
-    if (ext === 'md' || ext === 'rst') return '#61afef'
-    if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return '#98c379'
-    if (low === '.gitignore' || low === '.gitattributes') return '#e06c75'
-    return 'var(--text-muted)'
-  }
+  function tabIconComponent(name: string) { return _fileIcon(name) }
+  function tabIconColor(name: string): string { return _fileColor(name) }
 
   let mounted = $state(false)
   let error   = $state('')
