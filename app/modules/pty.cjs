@@ -23,7 +23,15 @@ function registerPtyHandlers(ipcMain, mainWindow) {
       ptyProcesses.delete(id)
     }
 
-    const shell = process.env.SHELL || '/bin/bash'
+    // Read preferred shell from prefs if set, fall back to $SHELL or bash
+    let shell = process.env.SHELL || '/bin/bash'
+    try {
+      const { getPrefs } = require('./prefs.cjs')
+      const prefs = getPrefs()
+      if (prefs.preferred_shell && typeof prefs.preferred_shell === 'string') {
+        shell = prefs.preferred_shell
+      }
+    } catch {}
     const safeEnv = safeEnvObject({ TERM: 'xterm-256color' })
 
     const proc = pty.spawn(shell, ['-l'], {
@@ -85,13 +93,13 @@ function registerPtyHandlers(ipcMain, mainWindow) {
   ipcMain.handle('pty_kill', (_event, args) => {
     const id = args?.id
     if (id === undefined || id === null || id === 'all') {
-      // Kill every active PTY
-      for (const [, proc] of ptyProcesses) proc.kill()
+      // Kill every active PTY — SIGTERM avoids SIGHUP propagation to sibling process groups on Linux
+      for (const [, proc] of ptyProcesses) { try { proc.kill('SIGTERM') } catch {} }
       ptyProcesses.clear()
     } else {
       const proc = ptyProcesses.get(id)
       if (proc) {
-        proc.kill()
+        try { proc.kill('SIGTERM') } catch {}
         ptyProcesses.delete(id)
       }
     }

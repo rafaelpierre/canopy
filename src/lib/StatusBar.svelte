@@ -1,12 +1,17 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
 
+  interface Props { showToast?: (msg: string, duration?: number) => void }
+  let { showToast }: Props = $props()
+
   let _diagnostics     = $state({ errors: 0, warnings: 0 })
   let _fileErrors      = $state(0)
   let _fileWarnings    = $state(0)
   let _diagByUri       = $state<Map<string, any[]>>(new Map())
   let _lspStatus       = $state<string>('stopped')
   let _lspBusy         = $state(false)
+  let _installing      = $state(false)
+  let _installPending  = $state<string | null>(null)  // lspId awaiting confirmation
   let _openFile        = $state<string | null>(null)
   let _pythonCmd       = $state('python3')
   let _activeLsp       = $state<string>('basedpyright')
@@ -93,22 +98,40 @@
       return
     }
 
-    // Check if available
+    // Check availability before switching
     const { available } = await invoke('check_lsp_available', { lspId })
     if (!available) {
-      // Try to install
-      const response = await invoke('install_ty')
-      if (!response.success) {
-        alert(`Failed to install ${lspId}: ${response.message}`)
-        closeLspCtxMenu()
-        return
-      }
+      // Show toaster confirmation instead of blocking dialog
+      closeLspCtxMenu()
+      _installPending = lspId
+      return
     }
 
     // Switch LSP — +page.svelte watches activeLsp and handles the restart
     stores.activeLsp.set(lspId)
     closeLspCtxMenu()
   }
+
+  async function confirmInstall() {
+    const lspId = _installPending
+    if (!lspId) return
+    _installPending = null
+    _installing = true
+    try {
+      const response = await invoke('install_ty')
+      if (!response.success) {
+        showToast?.(`Failed to install ${lspId}: ${response.message}`, 5000)
+        return
+      }
+      stores.activeLsp.set(lspId)
+    } catch (e: any) {
+      showToast?.(`Failed to install ${lspId}: ${e?.message ?? e}`, 5000)
+    } finally {
+      _installing = false
+    }
+  }
+
+  function cancelInstall() { _installPending = null }
 </script>
 
 <div class="statusbar">
@@ -134,8 +157,8 @@
     {/if}
 
     <button class="item lsp-status clickable" class:ready={_lspStatus === 'ready'} class:lsp-error={_lspStatus === 'error'} onclick={showLspMenu} title="Click to switch LSP">
-      {#if _lspStatus === 'starting' || _lspBusy}
-        <span class="lsp-spinner" title={_lspStatus === 'starting' ? 'LSP starting…' : 'Scanning workspace…'}></span>
+      {#if _lspStatus === 'starting' || _lspBusy || _installing}
+        <span class="lsp-spinner" title={_installing ? 'Installing…' : _lspStatus === 'starting' ? 'LSP starting…' : 'Scanning workspace…'}></span>
       {/if}
       {#if _lspStatus === 'ready'}{_activeLsp}
       {:else if _lspStatus === 'starting'}starting…
@@ -151,6 +174,16 @@
   <div class="lsp-menu" style="right:{lspCtxMenu.right}px;bottom:{lspCtxMenu.bottom}px" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
     <button class:active={_activeLsp === 'basedpyright'} onclick={() => selectLsp('basedpyright')}>basedpyright</button>
     <button class:active={_activeLsp === 'ty'} onclick={() => selectLsp('ty')}>ty</button>
+  </div>
+{/if}
+
+{#if _installPending}
+  <div class="install-toast" role="alertdialog" aria-label="Install confirmation">
+    <span class="install-msg"><strong>{_installPending}</strong> is not installed. Install it now?</span>
+    <div class="install-actions">
+      <button class="install-btn confirm" onclick={confirmInstall}>Install</button>
+      <button class="install-btn cancel" onclick={cancelInstall}>Cancel</button>
+    </div>
   </div>
 {/if}
 
@@ -234,4 +267,30 @@
   }
   .lsp-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
   .lsp-menu button.active { color: var(--text-primary); font-weight: 500; }
+
+  .install-toast {
+    position: fixed; bottom: 36px; right: 12px; z-index: 10000;
+    background: rgba(30,30,30,0.97); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; min-width: 260px; max-width: 340px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+    display: flex; flex-direction: column; gap: 8px;
+    animation: toast-slide-in 0.15s ease;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  @keyframes toast-slide-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .install-msg { font-size: 11px; color: var(--text-primary); line-height: 1.5; }
+  .install-msg strong { color: var(--accent, #528bff); }
+  .install-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .install-btn {
+    font-size: 11px; padding: 3px 10px; border-radius: 4px;
+    border: 1px solid var(--border); cursor: pointer;
+    font-family: inherit; transition: background 0.1s;
+  }
+  .install-btn.confirm { background: var(--accent, #528bff); color: #fff; border-color: var(--accent, #528bff); }
+  .install-btn.confirm:hover { background: #3a7bef; }
+  .install-btn.cancel  { background: none; color: var(--text-secondary); }
+  .install-btn.cancel:hover { background: var(--bg-hover); color: var(--text-primary); }
 </style>

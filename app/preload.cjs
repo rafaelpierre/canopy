@@ -6,15 +6,18 @@ const ALLOWED_INVOKE = new Set([
   'lsp_start', 'lsp_send', 'lsp_stop', 'lsp_which_binary', 'lsp_install_tool',
   'check_setup', 'detect_venv', 'check_lsp_available', 'install_ty', 'configure_ty_python',
   'watch_for_venv',
-  'load_prefs', 'save_prefs',
+  'load_prefs', 'save_prefs', 'list_shells',
   'dialog:openFolder', 'dialog:openFile',
   'watch_file', 'unwatch_file',
+  'watch_project', 'unwatch_project',
+  'create_file', 'create_dir', 'delete_path', 'rename_path',
+  'window_minimize', 'window_maximize', 'window_close',
   'app:confirm-quit', 'app:cancel-quit',
 ])
 
 const ALLOWED_LISTEN = new Set([
   'lsp://message', 'lsp://exit', 'pty:data', 'pty:exit', 'menu:action',
-  'file:changed-on-disk', 'venv:created', 'app:before-quit',
+  'file:changed-on-disk', 'venv:created', 'app:before-quit', 'dir:changed',
 ])
 
 contextBridge.exposeInMainWorld('electronAPI', {

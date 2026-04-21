@@ -302,11 +302,18 @@ class LspClient {
     this.notify('textDocument/didSave', { textDocument: { uri: pathToUri(filePath) } })
   }
 
-  completion(filePath: string, position: LspPosition): Promise<{ items: LspCompletionItem[] } | null> {
+  completion(
+    filePath: string,
+    position: LspPosition,
+    triggerKind = 1,
+    triggerCharacter?: string,
+  ): Promise<{ items: LspCompletionItem[] } | null> {
+    const context: Record<string, any> = { triggerKind }
+    if (triggerKind === 2 && triggerCharacter) context.triggerCharacter = triggerCharacter
     return this.request('textDocument/completion', {
       textDocument: { uri: pathToUri(filePath) },
       position,
-      context: { triggerKind: 1 },
+      context,
     })
   }
 

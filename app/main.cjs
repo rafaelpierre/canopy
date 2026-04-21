@@ -39,6 +39,8 @@ function createWindow() {
 
   const isDev = !app.isPackaged
 
+  const isMac = process.platform === 'darwin'
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -46,7 +48,9 @@ function createWindow() {
     minHeight: 500,
     center: true,
     backgroundColor: '#1c1c1c',
-    autoHideMenuBar: process.platform === 'linux',
+    // macOS: keep native traffic-light buttons but hide the bar background
+    // Windows/Linux: remove native frame entirely — custom HTML menu bar handles controls
+    ...(isMac ? { titleBarStyle: 'hiddenInset' } : { frame: false }),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -54,14 +58,6 @@ function createWindow() {
       partition: 'persist:canopy',
     },
   })
-
-  // Force dark theme for window decorations (title bar on Linux/Windows)
-  mainWindow.setBackgroundColor('#1c1c1c')
-  try {
-    mainWindow.setTitleBarOverlay({ color: '#1c1c1c', symbolColor: '#d4d4d4' })
-  } catch (_) {
-    // Titlebar overlay not supported on all Linux desktops
-  }
 
   if (!handlersRegistered) {
     const { registerFsHandlers, setProjectRoot } = require('./modules/fs.cjs')
@@ -75,6 +71,18 @@ function createWindow() {
     registerPtyHandlers(ipcMain, mainWindow)
     registerPrefsHandlers(ipcMain)
     registerSetupHandlers(ipcMain)
+
+    ipcMain.handle('window_minimize', () => mainWindow?.minimize())
+    ipcMain.handle('window_maximize', () => {
+      if (mainWindow?.isMaximized()) mainWindow.unmaximize()
+      else mainWindow?.maximize()
+    })
+    ipcMain.handle('window_close', () => {
+      if (!quitPending) {
+        quitPending = true
+        mainWindow?.webContents?.send('app:before-quit')
+      }
+    })
 
     app.on('before-quit', () => killAllPtys())
 

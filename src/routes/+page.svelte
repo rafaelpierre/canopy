@@ -6,13 +6,77 @@
   import Editor          from '$lib/Editor.svelte'
   import Terminal        from '$lib/Terminal.svelte'
   import StatusBar       from '$lib/StatusBar.svelte'
+  import MenuBar         from '$lib/MenuBar.svelte'
   import CommandPalette      from '$lib/CommandPalette.svelte'
   import DiagnosticsModal    from '$lib/DiagnosticsModal.svelte'
   import SaveDialog          from '$lib/SaveDialog.svelte'
   import type { SaveDialogType } from '$lib/SaveDialog.svelte'
+  import FileCodeIcon  from 'lucide-svelte/icons/file-code'
+  import BoxIcon       from 'lucide-svelte/icons/box'
+  import LockIcon      from 'lucide-svelte/icons/lock'
+  import SettingsIcon  from 'lucide-svelte/icons/settings'
+  import BracesIcon    from 'lucide-svelte/icons/braces'
+  import BookOpenIcon  from 'lucide-svelte/icons/book-open'
+  import TerminalIcon  from 'lucide-svelte/icons/terminal-square'
+  import GitBranchIcon from 'lucide-svelte/icons/git-branch'
+  import KeyIcon       from 'lucide-svelte/icons/key'
+  import CopyrightIcon from 'lucide-svelte/icons/copyright'
+  import ImageIcon     from 'lucide-svelte/icons/image'
+  import DatabaseIcon  from 'lucide-svelte/icons/database'
+  import GlobeIcon     from 'lucide-svelte/icons/globe'
+  import FileTextIcon  from 'lucide-svelte/icons/file-text'
+  import FileIcon      from 'lucide-svelte/icons/file'
+
+  function tabIconComponent(name: string) {
+    const ext = name.split('.').pop()?.toLowerCase() ?? ''
+    const low = name.toLowerCase()
+    if (ext === 'py' || low === '.python-version') return FileCodeIcon
+    if (low === 'dockerfile' || low.startsWith('docker') || low === '.dockerignore') return BoxIcon
+    if (low.includes('lock')) return LockIcon
+    if (ext === 'toml' || ext === 'ini' || ext === 'cfg' || ext === 'conf' || ext === 'yaml' || ext === 'yml') return SettingsIcon
+    if (ext === 'json') return BracesIcon
+    if (ext === 'md' || ext === 'rst') return BookOpenIcon
+    if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || low === 'makefile' || low === 'justfile') return TerminalIcon
+    if (low === '.gitignore' || low === '.gitattributes') return GitBranchIcon
+    if (low === '.env' || low.startsWith('.env.')) return KeyIcon
+    if (low === 'license' || low === 'licence') return CopyrightIcon
+    if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'svg' || ext === 'ico') return ImageIcon
+    if (ext === 'csv' || ext === 'parquet' || ext === 'sql') return DatabaseIcon
+    if (ext === 'html' || ext === 'css' || ext === 'js' || ext === 'ts' || ext === 'xml') return GlobeIcon
+    if (ext === 'txt') return FileTextIcon
+    return FileIcon
+  }
+
+  function tabIconColor(name: string): string {
+    const ext = name.split('.').pop()?.toLowerCase() ?? ''
+    const low = name.toLowerCase()
+    if (ext === 'py' || low === '.python-version') return '#e5c07b'
+    if (low === 'dockerfile' || low.startsWith('docker')) return '#61afef'
+    if (low.includes('lock')) return '#7a7a7a'
+    if (ext === 'toml' || ext === 'ini' || ext === 'cfg' || ext === 'conf') return '#7a7a7a'
+    if (ext === 'yaml' || ext === 'yml') return '#e06c75'
+    if (ext === 'json') return '#e5c07b'
+    if (ext === 'md' || ext === 'rst') return '#61afef'
+    if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return '#98c379'
+    if (low === '.gitignore' || low === '.gitattributes') return '#e06c75'
+    return 'var(--text-muted)'
+  }
 
   let mounted = $state(false)
   let error   = $state('')
+
+  // Toast notifications
+  interface Toast { id: number; message: string }
+  let toasts: Toast[] = $state([])
+  let toastId = 0
+  function showToast(message: string, duration = 3000) {
+    const id = toastId++
+    toasts = [...toasts, { id, message }]
+    setTimeout(() => { toasts = toasts.filter(t => t.id !== id) }, duration)
+  }
+
+  // Terminal split/new tab — wired via MenuBar callbacks
+  let terminalRef: any = $state(null)
 
   let mods: any = null
 
@@ -72,6 +136,7 @@
       show_file_tree:   mods.get(stores.showFileTree),
       python_cmd:       mods.get(stores.pythonCmd),
       active_lsp:       mods.get(stores.activeLsp),
+      // preferred_shell saved separately by Terminal.svelte
     }
   }
 
@@ -377,17 +442,27 @@
       // Buffer and disk are identical — no real conflict
       if (bufferContent === diskContent) return
 
-      // Genuine external change: buffer differs from new disk content
-      openDialog({ kind: 'disk-conflict', path: changedPath })
-        .then((action) => {
-          if (action === 'save') {
-            const saveFn = mods.get(stores.saveTabsFn)
-            if (saveFn) saveFn([changedPath])
-          } else if (action === 'discard') {
-            const reloadFn = mods.get(stores.reloadFileFn)
-            if (reloadFn) reloadFn(changedPath)
-          }
-        })
+      const dirty = mods.get(stores.dirtyTabs) as Set<string>
+      if (dirty.has(changedPath)) {
+        // Buffer has unsaved user edits — keep dialog to avoid data loss
+        openDialog({ kind: 'disk-conflict', path: changedPath })
+          .then((action) => {
+            if (action === 'save') {
+              const saveFn = mods.get(stores.saveTabsFn)
+              if (saveFn) saveFn([changedPath])
+            } else if (action === 'discard') {
+              const reloadFn = mods.get(stores.reloadFileFn)
+              if (reloadFn) reloadFn(changedPath)
+            }
+          })
+      } else {
+        // Buffer is clean — auto-reload from disk and show a brief toast
+        const reloadFn = mods.get(stores.reloadFileFn)
+        if (reloadFn) {
+          reloadFn(changedPath)
+          showToast('File reloaded from disk')
+        }
+      }
     }))
 
     // Main process asks renderer to confirm quit (window close / Cmd+Q)
@@ -433,30 +508,42 @@
   async function initMenuListener(ipcMod: any): Promise<Array<() => void>> {
     const unlistenMenu = await ipcMod.listen('menu:action', (e: any) => {
       const action = e.payload as string
-      if (action === 'open_folder')       openFolder()
-      if (action === 'toggle_file_tree')  { _showFileTree = !_showFileTree; mods.stores.showFileTree.set(_showFileTree) }
-      if (action === 'toggle_terminal')   { _showTerminal = !_showTerminal; mods.stores.showTerminal.set(_showTerminal) }
+      if (action === 'open_folder')              openFolder()
+      if (action === 'toggle_file_tree')         doToggleTree()
+      if (action === 'toggle_terminal')          doToggleTerminal()
       if (action === 'command_palette')          openPalette('file')
       if (action === 'command_palette_commands') openPalette('command')
-      if (action === 'zoom_in') {
-        const pane = mods.get(mods.stores.focusedPane)
-        if (pane === 'tree')          mods.stores.treeFontSize.update((s: number) => Math.min(s + 1, 22))
-        else if (pane === 'terminal') mods.stores.termFontSize.update((s: number) => Math.min(s + 1, 22))
-        else                          mods.stores.editorFontSize.update((s: number) => Math.min(s + 1, 28))
-      }
-      if (action === 'zoom_out') {
-        const pane = mods.get(mods.stores.focusedPane)
-        if (pane === 'tree')          mods.stores.treeFontSize.update((s: number) => Math.max(s - 1, 8))
-        else if (pane === 'terminal') mods.stores.termFontSize.update((s: number) => Math.max(s - 1, 8))
-        else                          mods.stores.editorFontSize.update((s: number) => Math.max(s - 1, 8))
-      }
-      if (action === 'zoom_reset') {
-        mods.stores.editorFontSize.set(13)
-        mods.stores.treeFontSize.set(15)
-        mods.stores.termFontSize.set(13)
-      }
+      if (action === 'zoom_in')                  doZoomIn()
+      if (action === 'zoom_out')                 doZoomOut()
+      if (action === 'zoom_reset')               doZoomReset()
+      if (action === 'new_terminal_tab')         terminalRef?.addTab?.()
+      if (action === 'split_terminal')           terminalRef?.splitActiveTab?.()
     })
     return [unlistenMenu]
+  }
+
+  // Helper actions used by both MenuBar and keyboard shortcuts
+  function doToggleTree()     { _showFileTree = !_showFileTree; mods?.stores?.showFileTree?.set(_showFileTree) }
+  function doToggleTerminal() { _showTerminal = !_showTerminal; mods?.stores?.showTerminal?.set(_showTerminal) }
+  function doZoomIn() {
+    if (!mods) return
+    const pane = mods.get(mods.stores.focusedPane)
+    if (pane === 'tree')          mods.stores.treeFontSize.update((s: number) => Math.min(s + 1, 22))
+    else if (pane === 'terminal') mods.stores.termFontSize.update((s: number) => Math.min(s + 1, 22))
+    else                          mods.stores.editorFontSize.update((s: number) => Math.min(s + 1, 28))
+  }
+  function doZoomOut() {
+    if (!mods) return
+    const pane = mods.get(mods.stores.focusedPane)
+    if (pane === 'tree')          mods.stores.treeFontSize.update((s: number) => Math.max(s - 1, 8))
+    else if (pane === 'terminal') mods.stores.termFontSize.update((s: number) => Math.max(s - 1, 8))
+    else                          mods.stores.editorFontSize.update((s: number) => Math.max(s - 1, 8))
+  }
+  function doZoomReset() {
+    if (!mods) return
+    mods.stores.editorFontSize.set(13)
+    mods.stores.treeFontSize.set(15)
+    mods.stores.termFontSize.set(13)
   }
 
   // ---------------------------------------------------------------------------
@@ -714,11 +801,17 @@
     const mod = e.metaKey || e.ctrlKey
     if (mod && e.key === 'w') { e.preventDefault(); if (_openFilePath) closeTab(_openFilePath) }
     if (mod && e.shiftKey && e.key === 'p') { e.preventDefault(); openPalette('command') }
+    if (mod && !e.shiftKey && e.key === 'p') { e.preventDefault(); openPalette('file') }
     if (mod && !e.shiftKey && e.key === 's') {
       e.preventDefault()
       const saveFn = mods?.get(mods.stores.saveTabsFn)
       if (saveFn) saveFn([...(_openTabs)])
     }
+    if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); doZoomIn() }
+    if (mod && (e.key === '-' || e.key === '_')) { e.preventDefault(); doZoomOut() }
+    if (mod && e.key === '0') { e.preventDefault(); doZoomReset() }
+    if (mod && e.key === 'b') { e.preventDefault(); doToggleTree() }
+    if (mod && e.key === 'j') { e.preventDefault(); doToggleTerminal() }
   }
 
   // --- Resize ---
@@ -789,6 +882,19 @@
 {:else}
 <div class="app">
 
+  <MenuBar
+    onOpenFolder={openFolder}
+    onToggleTree={doToggleTree}
+    onToggleTerminal={doToggleTerminal}
+    onZoomIn={doZoomIn}
+    onZoomOut={doZoomOut}
+    onZoomReset={doZoomReset}
+    onCommandPalette={() => openPalette('file')}
+    onCommandPaletteCommands={() => openPalette('command')}
+    onNewTerminalTab={() => (terminalRef as any)?.addTab?.()}
+    onSplitTerminal={() => (terminalRef as any)?.splitActiveTab?.()}
+  />
+
   {#if !_setupReady}
     <div class="setup-banner"><span>{_setupMessage}</span></div>
   {/if}
@@ -808,10 +914,13 @@
       <div class="tab-bar">
         {#if _openTabs.length > 0}
           {#each _openTabs as tab}
+            {@const tabName = basename(tab)}
+            {@const TabIcon = tabIconComponent(tabName)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div role="tab" tabindex="0" class="tab" class:active={tab === _openFilePath} class:dirty={_dirtyTabs.has(tab)} onclick={() => switchTab(tab)} oncontextmenu={(e) => onTabContextMenu(e, tab)}>
               {#if _dirtyTabs.has(tab)}<span class="dirty-dot" aria-label="unsaved">●</span>{/if}
-              <span class="tab-name">{basename(tab)}</span>
+              <span class="tab-icon" style="color:{tabIconColor(tabName)}"><TabIcon size={12} strokeWidth={1.5} /></span>
+              <span class="tab-name">{tabName}</span>
               <button class="tab-close" onclick={(e) => closeTab(tab, e)}>×</button>
             </div>
           {/each}
@@ -832,13 +941,13 @@
         <div class="resize-h" onmousedown={startResizeTerm}></div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="term-panel" style="height:{terminalHeight}px" onmousedown={() => mods.stores.focusedPane.set('terminal')}>
-          <Terminal />
+          <Terminal bind:this={terminalRef} />
         </div>
       {/if}
     </div>
   </div>
 
-  <StatusBar />
+  <StatusBar {showToast} />
 </div>
 
 {#if tabCtxMenu}
@@ -876,6 +985,14 @@
   onDiscard={() => resolveDialog('discard')}
   onCancel={() => resolveDialog('cancel')}
 />
+
+{#if toasts.length > 0}
+  <div class="toast-container">
+    {#each toasts as toast (toast.id)}
+      <div class="toast">{toast.message}</div>
+    {/each}
+  </div>
+{/if}
 {/if}
 
 <style>
@@ -915,6 +1032,7 @@
   .tab:hover { background:var(--bg-hover); }
   .tab.active { background:var(--bg-editor); color:var(--text-primary); border-bottom:1px solid var(--accent); margin-bottom:-1px; }
   .tab-name { pointer-events:none; }
+  .tab-icon { display:flex; align-items:center; flex-shrink:0; pointer-events:none; }
   .dirty-dot {
     font-size: 7px; color: var(--accent); opacity: 0.75; flex-shrink: 0;
     line-height: 1; pointer-events: none;
@@ -931,14 +1049,34 @@
   .ctx-menu {
     position: fixed; z-index: 9999;
     background: var(--bg-editor); border: 1px solid var(--border);
-    border-radius: 4px; padding: 4px 0; min-width: 140px;
+    border-radius: 8px; padding: 4px 0; min-width: 140px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   }
   .ctx-menu button {
     display: block; width: 100%; text-align: left;
     padding: 6px 14px; font-size: 12px; background: none;
     border: none; cursor: pointer; color: var(--text-secondary);
+    font-family: inherit;
   }
   .ctx-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  /* Toast notifications */
+  .toast-container {
+    position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    z-index: 10000; pointer-events: none;
+  }
+  .toast {
+    background: rgba(30,30,30,0.95); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 7px 16px; font-size: 12px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+    animation: toast-in 0.15s ease;
+  }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 
 </style>

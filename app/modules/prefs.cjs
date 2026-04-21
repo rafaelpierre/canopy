@@ -9,8 +9,11 @@ function prefsPath() {
   return path.join(configDir, 'canopy', 'preferences.json')
 }
 
+let _cachedPrefs = null
+
 const PREF_VALIDATORS = {
   last_project:      (v) => v === null || typeof v === 'string',
+  preferred_shell:   (v) => v === null || typeof v === 'string',
   project_sessions:  (v) => {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
     const keys = Object.keys(v)
@@ -46,12 +49,22 @@ function sanitizePrefs(raw) {
   return out
 }
 
+function getPrefs() {
+  if (_cachedPrefs) return _cachedPrefs
+  const p = prefsPath()
+  if (!fs.existsSync(p)) return {}
+  try { return sanitizePrefs(JSON.parse(fs.readFileSync(p, 'utf-8'))) } catch { return {} }
+}
+
 function registerPrefsHandlers(ipcMain) {
   ipcMain.handle('load_prefs', () => {
+    _cachedPrefs = null  // invalidate cache
     const p = prefsPath()
     if (!fs.existsSync(p)) return {}
     try {
-      return sanitizePrefs(JSON.parse(fs.readFileSync(p, 'utf-8')))
+      const result = sanitizePrefs(JSON.parse(fs.readFileSync(p, 'utf-8')))
+      _cachedPrefs = result
+      return result
     } catch {
       return {}
     }
@@ -62,11 +75,28 @@ function registerPrefsHandlers(ipcMain) {
     const p = prefsPath()
     const dir = path.dirname(p)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    const data = JSON.stringify(sanitizePrefs(args.prefs), null, 2)
+    const sanitized = sanitizePrefs(args.prefs)
+    _cachedPrefs = sanitized  // update cache immediately
+    const data = JSON.stringify(sanitized, null, 2)
     if (pendingWrite) return pendingWrite
     pendingWrite = fs.promises.writeFile(p, data).finally(() => { pendingWrite = null })
     return pendingWrite
   })
+
+  ipcMain.handle('list_shells', async () => {
+    if (process.platform === 'win32') {
+      const candidates = ['powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe']
+      return candidates.filter(s => {
+        try { require('child_process').execSync(`where ${s}`, { stdio: 'ignore' }); return true } catch { return false }
+      })
+    }
+    try {
+      const content = await fs.promises.readFile('/etc/shells', 'utf-8')
+      return content.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    } catch {
+      return [process.env.SHELL || '/bin/bash']
+    }
+  })
 }
 
-module.exports = { registerPrefsHandlers }
+module.exports = { registerPrefsHandlers, getPrefs }

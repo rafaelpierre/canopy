@@ -490,17 +490,19 @@
       if (model && path !== currentPath) model.dispose()
     })
 
-    // Register completion provider
+    // Register completion provider — trigger on common Python typing patterns
     monaco.languages.registerCompletionItemProvider('python', {
-      triggerCharacters: ['.'],
-      provideCompletionItems: async (model: any, position: any) => {
+      triggerCharacters: ['.', '(', '[', ',', ' ', ':', '"', "'", '@', '/'],
+      provideCompletionItems: async (model: any, position: any, context: any) => {
         if (!lspClient?.isReady() || !currentPath) return { suggestions: [] }
         const lspPos = monacoToLsp(position)
         try {
-          const result = await lspClient.completion(currentPath, lspPos)
+          const triggerKind = context?.triggerKind ?? 1
+          const triggerChar = context?.triggerCharacter
+          const result = await lspClient.completion(currentPath, lspPos, triggerKind, triggerChar)
           const items = result?.items ?? result ?? []
           return {
-            suggestions: items.slice(0, 100).map((item: any) => ({
+            suggestions: items.slice(0, 200).map((item: any) => ({
               label: item.label,
               kind: item.kind ?? 1,
               detail: item.detail,

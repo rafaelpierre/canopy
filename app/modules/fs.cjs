@@ -206,6 +206,55 @@ function registerFsHandlers(ipcMain, mainWindow) {
     return results
   })
 
+  // Watch the entire project root for file system changes (tree auto-refresh)
+  let projectDirWatcher = null
+  let projectDirDebounce = null
+  ipcMain.handle('watch_project', (_event, args) => {
+    if (projectDirWatcher) { try { projectDirWatcher.close() } catch {} projectDirWatcher = null }
+    if (!args?.root) return
+    let safePath
+    try { safePath = validatePath(args.root) } catch { return }
+    try {
+      projectDirWatcher = fs.watch(safePath, { persistent: false, recursive: true }, () => {
+        if (projectDirDebounce) clearTimeout(projectDirDebounce)
+        projectDirDebounce = setTimeout(() => {
+          projectDirDebounce = null
+          mainWindow?.webContents?.send('dir:changed', { root: safePath })
+        }, 300)
+      })
+      projectDirWatcher.on('error', () => { projectDirWatcher = null })
+    } catch {}
+  })
+
+  ipcMain.handle('unwatch_project', () => {
+    if (projectDirDebounce) { clearTimeout(projectDirDebounce); projectDirDebounce = null }
+    if (projectDirWatcher) { try { projectDirWatcher.close() } catch {} projectDirWatcher = null }
+  })
+
+  ipcMain.handle('create_file', async (_event, args) => {
+    const safePath = validatePath(args.path)
+    // Must not already exist
+    if (fs.existsSync(safePath)) throw new Error('File already exists')
+    await fs.promises.mkdir(path.dirname(safePath), { recursive: true })
+    await fs.promises.writeFile(safePath, '')
+  })
+
+  ipcMain.handle('create_dir', async (_event, args) => {
+    const safePath = validatePath(args.path)
+    await fs.promises.mkdir(safePath, { recursive: true })
+  })
+
+  ipcMain.handle('delete_path', async (_event, args) => {
+    const safePath = validatePath(args.path)
+    await fs.promises.rm(safePath, { recursive: true, force: true })
+  })
+
+  ipcMain.handle('rename_path', async (_event, args) => {
+    const safeSrc = validatePath(args.src)
+    const safeDst = validatePath(args.dst)
+    await fs.promises.rename(safeSrc, safeDst)
+  })
+
   // Watch the project root directory for .venv creation.
   // Fires 'venv:created' when a known venv directory appears.
   let venvDirWatcher = null
