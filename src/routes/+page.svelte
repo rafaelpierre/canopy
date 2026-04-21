@@ -12,7 +12,7 @@
   import SaveDialog          from '$lib/SaveDialog.svelte'
   import type { SaveDialogType } from '$lib/SaveDialog.svelte'
   import { fileIcon as _fileIcon, fileColor as _fileColor } from '$lib/file-icons'
-  import { menuFocus, handleMenuKeydown as _handleMenuKeydown } from '$lib/menu-utils'
+  import { menuFocus, handleMenuKeydown } from '$lib/menu-utils'
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
 
@@ -28,10 +28,6 @@
     tick().then(() => {
       (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus()
     })
-  }
-
-  function handleMenuKeydown(e: KeyboardEvent, closeMenu: () => void) {
-    _handleMenuKeydown(e, closeMenu)
   }
 
   function tabIconComponent(name: string) { return _fileIcon(name) }

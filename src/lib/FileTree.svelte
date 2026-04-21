@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte'
-  import ChevronRightIcon from 'lucide-svelte/icons/chevron-right'
-  import ChevronDownIcon  from 'lucide-svelte/icons/chevron-down'
+  import ChevronRightIcon  from 'lucide-svelte/icons/chevron-right'
+  import ChevronDownIcon   from 'lucide-svelte/icons/chevron-down'
+  import FolderOpenIcon    from 'lucide-svelte/icons/folder-open'
+  import FolderIcon        from 'lucide-svelte/icons/folder'
+  import FileIcon          from 'lucide-svelte/icons/file'
   import { fileIcon, fileColor } from './file-icons'
-  import { menuFocus, handleMenuKeydown as _handleMenuKeydown } from './menu-utils'
+  import { menuFocus, handleMenuKeydown } from './menu-utils'
 
   interface FileEntry {
     name:      string
@@ -381,7 +384,7 @@
   let chevronSize: number = $derived(Math.max(12, Math.round(fontSize * 0.92)))
 
   function handleCtxMenuKeydown(e: KeyboardEvent) {
-    _handleMenuKeydown(e, closeCtxMenu)
+    handleMenuKeydown(e, closeCtxMenu)
   }
 </script>
 

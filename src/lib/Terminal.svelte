@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte'
+  import { get } from 'svelte/store'
   import { Terminal }           from '@xterm/xterm'
   import { FitAddon }           from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
-  import { menuFocus, handleMenuKeydown as _handleMenuKeydown } from './menu-utils'
+  import { menuFocus, handleMenuKeydown } from './menu-utils'
 
   let containerEl: HTMLDivElement
-  let invoke: any
+  let invoke:    any
+  let storesMod: any
+  let cachedPrefs: Record<string, any> = {}
   let cleanups: Array<() => void> = []
 
   interface TermInstance {
@@ -104,9 +107,6 @@
     }
   }
 
-  function handleMenuKeydown(e: KeyboardEvent, closeMenu: () => void) {
-    _handleMenuKeydown(e, closeMenu)
-  }
 
   function onTabsKeydown(e: KeyboardEvent) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
@@ -165,9 +165,7 @@
     const el = containerEl?.querySelector(`[data-tab-id="${id}"]`) as HTMLElement | null
     if (el) openInstanceInEl(inst, el)
 
-    const { get } = await import('svelte/store')
-    const storesMod = await import('./stores')
-    const root = get(storesMod.projectRoot) as string | null
+    const root = storesMod ? get(storesMod.projectRoot) as string | null : null
     tab.title = makeTitle(root)
     tabs = [...tabs]
 
@@ -193,9 +191,7 @@
     // Refit both sides after layout change
     requestAnimationFrame(() => refitTab(tab))
 
-    const { get } = await import('svelte/store')
-    const storesMod = await import('./stores')
-    const root = get(storesMod.projectRoot) as string | null
+    const root = storesMod ? get(storesMod.projectRoot) as string | null : null
     await spawnInstance(inst, root)
   }
 
@@ -247,23 +243,24 @@
       tab.title = shell ? `${shellBasename(shell)}: ${currentDir || 'shell'}` : (currentDir || 'shell')
     }
     tabs = [...tabs]
-    const prefs = await invoke('load_prefs').catch(() => ({}))
-    await invoke('save_prefs', { prefs: { ...prefs, preferred_shell: shell } }).catch(() => {})
+    cachedPrefs = { ...cachedPrefs, preferred_shell: shell }
+    await invoke('save_prefs', { prefs: cachedPrefs }).catch(() => {})
   }
 
   onMount(async () => {
     window.addEventListener('click', closeTermCtxMenu)
 
-    const [ipcMod, storesMod] = await Promise.all([
+    const [ipcMod, _storesMod] = await Promise.all([
       import('$lib/ipc'),
       import('./stores'),
     ])
-    invoke = ipcMod.invoke
+    invoke    = ipcMod.invoke
+    storesMod = _storesMod
 
     // Load preferred shell from prefs
     try {
-      const prefs = await invoke('load_prefs')
-      if (prefs.preferred_shell) preferredShell = prefs.preferred_shell
+      cachedPrefs = await invoke('load_prefs')
+      if (cachedPrefs.preferred_shell) preferredShell = cachedPrefs.preferred_shell
     } catch {}
 
     // PTY data → correct terminal instance (global listener filtered by id)
