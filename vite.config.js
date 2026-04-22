@@ -17,6 +17,7 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
+    hmr: { port: 5183 },
     watch: {
       ignored: ["**/electron/**"],
     },
@@ -37,8 +38,10 @@ export default defineConfig(async () => ({
 
   build: {
     target: 'chrome132',
+    minify: 'esbuild',
+    sourcemap: false,
     reportCompressedSize: false,
-    chunkSizeWarningLimit: 2000,  // Electron app — loaded locally, not over network
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         /** @param {string} id */

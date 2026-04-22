@@ -51,6 +51,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 500,
     center: true,
+    show: false,
     backgroundColor: '#1c1c1c',
     // macOS: keep native traffic-light buttons but hide the bar background
     // Windows/Linux: remove native frame entirely — custom HTML menu bar handles controls
@@ -62,6 +63,7 @@ function createWindow() {
       partition: 'persist:canopy',
     },
   })
+  mainWindow.once('ready-to-show', () => mainWindow.show())
 
   if (!handlersRegistered) {
     const { registerFsHandlers, setProjectRoot } = require('./modules/fs.cjs')
