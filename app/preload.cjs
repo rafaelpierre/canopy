@@ -5,7 +5,7 @@ const ALLOWED_INVOKE = new Set([
   'list_dir', 'list_python_dir', 'get_python_paths',
   'pty_spawn', 'pty_write', 'pty_resize', 'pty_kill',
   'lsp_start', 'lsp_send', 'lsp_stop', 'lsp_which_binary', 'lsp_install_tool',
-  'check_setup', 'detect_venv', 'detect_venv_recursive', 'check_lsp_available', 'install_ty', 'configure_ty_python',
+  'check_setup', 'detect_venv', 'detect_venv_recursive', 'find_ancestor_venv', 'check_lsp_available', 'install_ty', 'configure_ty_python',
   'watch_for_venv',
   'load_prefs', 'save_prefs', 'list_shells',
   'dialog:openFolder', 'dialog:openFile',

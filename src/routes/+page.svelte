@@ -12,7 +12,7 @@
   import type { SaveDialogType } from '$lib/SaveDialog.svelte'
   import { menuFocus, handleMenuKeydown } from '$lib/menu-utils'
   import TabBar from '$lib/TabBar.svelte'
-  import { findClosestVenv, createVenvManager } from '$lib/venv-utils'
+  import { createVenvManager } from '$lib/venv-utils'
   import { scanWorkspace } from '$lib/lsp/manager'
 
   let mounted = $state(false)
@@ -228,7 +228,7 @@
 
   let venvManager: ReturnType<typeof createVenvManager> | null = null
 
-  function maybeScanForVenv(dir: string) { return venvManager?.maybeScanForVenv(dir) }
+  function findVenvForFile(filePath: string) { return venvManager?.findVenvForFile(filePath) }
   function preloadVenvCache(root: string) { venvManager?.preloadVenvCache(root) }
 
   /**
@@ -285,7 +285,7 @@
           stores.pythonCmd.set(venvPython)
           configureTyPython(lastProject, venvPython)
         }
-        venvManager?.clearScanCache()
+        venvManager?.clearMemo()
         mods.invoke('watch_for_venv', { root: lastProject, recursive: true }).catch(() => {})
         await startLsp(lastProject, stores)
       } catch {
@@ -320,28 +320,29 @@
       }, 800)
     }))
 
-    // Auto-switch pythonCmd to the venv nearest to the active file (monorepo support).
-    // Also triggers a lazy shallow venv scan for the opened file's directory.
-    // Only toasts when switching to a different venv, not on every file open.
-    let _lastToastedVenvPath = ''
-    unsubs.push(stores.openFilePath.subscribe((filePath: string | null) => {
-      if (!filePath) return
-      // Lazy venv scan for the file's parent directory (non-blocking, deduped)
-      const dir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : filePath
-      maybeScanForVenv(dir)
-      const venvList = mods.get(stores.venvMap) as any[]
-      if (venvList.length < 2) return  // only auto-switch in monorepos with multiple envs
-      const match = findClosestVenv(filePath, venvList)
-      if (!match) return
-      if (match.pythonPath === mods.get(stores.pythonCmd)) return
-      stores.pythonCmd.set(match.pythonPath)
-      if (match.venvPath !== _lastToastedVenvPath) {
-        _lastToastedVenvPath = match.venvPath
-        const venvName = match.venvPath.split('/').pop() ?? '.venv'
-        const rel = match.subdir !== mods.get(stores.projectRoot)
-          ? ` · ${match.subdir.split('/').pop()}` : ''
+    // Walk-up venv discovery: for each opened file, find the closest ancestor .venv
+    // (bounded by project root) and auto-switch pythonCmd. O(depth) stats per file,
+    // no recursive scanning. Toast only on actual pythonCmd change.
+    let _lastToastedVenv = ''
+    unsubs.push(stores.pythonCmd.subscribe((cmd: string) => {
+      if (!cmd || cmd === _lastToastedVenv) return
+      // Derive venvPath from pythonCmd to produce a readable toast
+      const m = cmd.match(/^(.+?)\/(?:bin\/python\d*|Scripts\/python\.exe)$/)
+      if (!m) { _lastToastedVenv = cmd; return }
+      const venvPath = m[1]
+      if (_lastToastedVenv) {  // skip initial value
+        const venvName = venvPath.split('/').pop() ?? '.venv'
+        const parent = venvPath.split('/').slice(0, -1).join('/')
+        const root = mods.get(stores.projectRoot) as string | null
+        const rel = root && parent !== root ? ` · ${parent.split('/').pop()}` : ''
         showToast(`Using ${venvName}${rel}`)
       }
+      _lastToastedVenv = cmd
+    }))
+
+    unsubs.push(stores.openFilePath.subscribe((filePath: string | null) => {
+      if (!filePath) return
+      findVenvForFile(filePath)
     }))
 
     return unsubs
@@ -516,8 +517,9 @@
       console.log('[Canopy] build marker: lazy-venv + cache v2 + async get_python_paths')
 
       venvManager = createVenvManager({ invoke: mods.invoke, get: mods.get, stores: {
-        projectRoot: stores.projectRoot,
-        venvMap:     stores.venvMap,
+        projectRoot:  stores.projectRoot,
+        pythonCmd:    stores.pythonCmd,
+        venvMap:      stores.venvMap,
         venvScanning: stores.venvScanning,
       }})
 
@@ -724,7 +726,7 @@
     } catch (e) {
       console.warn('detect_venv:', e)
     }
-    venvManager?.clearScanCache()
+    venvManager?.clearMemo()
     mods.invoke('watch_for_venv', { root: folder, recursive: true }).catch(() => {})
 
     // Start LSP
@@ -856,7 +858,7 @@
     {#if _showFileTree && _projectRoot}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="panel filetree" onmousedown={() => mods?.stores?.focusedPane?.set('tree')}>
-        <FileTree onFolderExpand={maybeScanForVenv} />
+        <FileTree />
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="resize-v" onmousedown={startResizeTree}></div>

@@ -1,8 +1,10 @@
 import type { VenvInfo } from '$lib/stores'
 
-export const VENV_CACHE_KEY = 'canopy:venv_cache_v2'
+// Cross-session cache of discovered venv-per-file results. Mtime of the venv's
+// owning directory is stored so we can invalidate when the .venv is removed.
+export const VENV_CACHE_KEY = 'canopy:venv_cache_v3'
 
-export interface VenvCacheEntry { mtime: number; entryCount: number; venvs: VenvInfo[] }
+export interface VenvCacheEntry { mtime: number; venv: VenvInfo | null }
 
 export function loadVenvCache(): Record<string, VenvCacheEntry> {
   try { return JSON.parse(localStorage.getItem(VENV_CACHE_KEY) ?? '{}') } catch { return {} }
@@ -33,24 +35,28 @@ export interface VenvManagerDeps {
   get: (store: any) => any
   stores: {
     projectRoot: any
+    pythonCmd: any
     venvMap: any
     venvScanning: any
   }
 }
 
+/**
+ * Walk-up venv discovery: given a file path, finds the closest ancestor directory
+ * (bounded by projectRoot) that contains a .venv / venv / .env / env. Caches per
+ * directory to avoid repeat lookups across sessions.
+ *
+ * Pattern matches the Python Envy VS Code extension.
+ */
 export function createVenvManager(deps: VenvManagerDeps) {
   const { invoke, get, stores } = deps
-  const scanned = new Set<string>()
-  let scanCount = 0
+  const searched = new Map<string, VenvInfo | null>()  // dir → result (in-session memo)
+  let busyCount = 0
 
-  function applyVenvsToMap(venvs: VenvInfo[]) {
-    if (!venvs.length) return
+  function applyVenvToMap(venv: VenvInfo) {
     const current = get(stores.venvMap) as VenvInfo[]
-    const merged = [...current]
-    for (const v of venvs) {
-      if (!merged.some(e => e.pythonPath === v.pythonPath)) merged.push(v)
-    }
-    if (merged.length !== current.length) stores.venvMap.set(merged)
+    if (current.some(v => v.pythonPath === venv.pythonPath)) return
+    stores.venvMap.set([...current, venv])
   }
 
   function preloadVenvCache(root: string) {
@@ -60,8 +66,9 @@ export function createVenvManager(deps: VenvManagerDeps) {
     const venvs: VenvInfo[] = []
     for (const [key, entry] of Object.entries(cache)) {
       if (!key.startsWith(prefix)) continue
-      for (const v of entry.venvs) {
-        if (!seen.has(v.pythonPath)) { seen.add(v.pythonPath); venvs.push(v) }
+      if (entry.venv && !seen.has(entry.venv.pythonPath)) {
+        seen.add(entry.venv.pythonPath)
+        venvs.push(entry.venv)
       }
     }
     if (venvs.length) {
@@ -70,42 +77,49 @@ export function createVenvManager(deps: VenvManagerDeps) {
     }
   }
 
-  async function maybeScanForVenv(dir: string): Promise<void> {
+  /**
+   * For a freshly-opened file, walk up its ancestors to find the closest venv
+   * and auto-switch pythonCmd. O(depth) stats on the main process side.
+   */
+  async function findVenvForFile(filePath: string): Promise<void> {
     const root = get(stores.projectRoot) as string | null
-    if (!root || !dir || dir === root) return
-    if (!dir.startsWith(root + '/')) return
-    if (scanned.has(dir)) return
-    scanned.add(dir)
+    if (!root || !filePath) return
+    if (filePath !== root && !filePath.startsWith(root + '/')) return
 
-    const cacheKey = root + ':' + dir
-    let fp: { mtime: number; entryCount: number } | null = null
-    try { fp = await invoke('dir_mtime', { path: dir }) } catch {}
+    const dir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : filePath
 
-    if (fp !== null) {
-      const cache = loadVenvCache()
-      const entry = cache[cacheKey]
-      if (entry && entry.mtime === fp.mtime && entry.entryCount === fp.entryCount) {
-        applyVenvsToMap(entry.venvs)
-        return
-      }
+    // In-session memo — if we already looked up this dir, reuse the result
+    if (searched.has(dir)) {
+      const cached = searched.get(dir) ?? null
+      if (cached) applyAndSwitch(cached)
+      return
     }
 
-    if (++scanCount === 1) stores.venvScanning.set(true)
+    if (++busyCount === 1) stores.venvScanning.set(true)
     try {
-      const list = await invoke('detect_venv_recursive', { projectRoot: dir, maxDepth: 0 })
-      const venvs: VenvInfo[] = Array.isArray(list) ? list : []
-      if (fp !== null) {
-        const cache = loadVenvCache()
-        cache[cacheKey] = { mtime: fp.mtime, entryCount: fp.entryCount, venvs }
-        saveVenvCache(cache)
-      }
-      applyVenvsToMap(venvs)
+      const venv = await invoke('find_ancestor_venv', { filePath }) as VenvInfo | null
+      searched.set(dir, venv)
+
+      // Persist for next session, keyed by file's dir
+      const cache = loadVenvCache()
+      cache[root + ':' + dir] = { mtime: Date.now(), venv }
+      saveVenvCache(cache)
+
+      if (venv) applyAndSwitch(venv)
     } catch (e) {
-      console.warn('[Canopy] maybeScanForVenv:', e)
+      console.warn('[Canopy] findVenvForFile:', e)
     } finally {
-      if (--scanCount === 0) stores.venvScanning.set(false)
+      if (--busyCount === 0) stores.venvScanning.set(false)
     }
   }
 
-  return { maybeScanForVenv, preloadVenvCache, clearScanCache: () => scanned.clear() }
+  function applyAndSwitch(venv: VenvInfo) {
+    applyVenvToMap(venv)
+    const current = get(stores.pythonCmd) as string
+    if (current !== venv.pythonPath) stores.pythonCmd.set(venv.pythonPath)
+  }
+
+  function clearMemo() { searched.clear() }
+
+  return { findVenvForFile, preloadVenvCache, clearMemo }
 }

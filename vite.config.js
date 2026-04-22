@@ -3,7 +3,7 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import monacoEditorPlugin from "vite-plugin-monaco-editor";
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [
     sveltekit(),
     // @ts-expect-error default export quirk
@@ -56,4 +56,4 @@ export default defineConfig(async () => ({
       },
     },
   },
-}));
+});

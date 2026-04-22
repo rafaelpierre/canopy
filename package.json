@@ -91,6 +91,7 @@
       "target": [
         "dmg"
       ],
+      "artifactName": "canopy-mac-${arch}-${version}.${ext}",
       "category": "public.app-category.developer-tools",
       "electronLanguages": ["en"]
     },

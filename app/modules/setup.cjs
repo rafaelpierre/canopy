@@ -180,6 +180,17 @@ function registerSetupHandlers(ipcMain) {
       if (depth > maxDepth) return
       let entries
       try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
+      // Python Envy–style heuristic: a directory without any Python project marker
+      // is very unlikely to own a .venv. Skip the subtree when neither a marker
+      // nor a venv directory is directly visible.
+      const PROJECT_MARKERS = new Set(['pyproject.toml', 'Pipfile', 'setup.py', 'requirements.txt', 'manage.py'])
+      let hasMarker = false
+      let hasVenvHere = false
+      for (const entry of entries) {
+        if (entry.isDirectory() && venvNameSet.has(entry.name)) hasVenvHere = true
+        else if (!entry.isDirectory() && PROJECT_MARKERS.has(entry.name)) hasMarker = true
+      }
+      if (depth > 0 && !hasMarker && !hasVenvHere) return
       const tasks = []
       for (const entry of entries) {
         if (!entry.isDirectory()) continue
@@ -214,6 +225,47 @@ function registerSetupHandlers(ipcMain) {
     await walk(resolved, 0)
     console.log(`[Setup] detect_venv_recursive found ${results.length} venv(s) in`, resolved)
     return results
+  })
+
+  // Walk UP from filePath's directory toward the project root, checking each level for
+  // a .venv/venv/.env/env. Returns the closest ancestor venv or null.
+  // This is O(depth) stats — way faster than readdir-based recursive scanning.
+  // Inspired by the Python Envy VS Code extension.
+  ipcMain.handle('find_ancestor_venv', async (_event, args) => {
+    const filePath = args?.filePath
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null
+    const trustedRoot = getProjectRoot()
+    if (!trustedRoot) return null
+    const resolved = path.resolve(filePath)
+    if (resolved !== trustedRoot && !resolved.startsWith(trustedRoot + path.sep)) return null
+
+    const { VENV_NAMES } = require('../constants.cjs')
+    let dir = path.dirname(resolved)
+
+    while (dir === trustedRoot || dir.startsWith(trustedRoot + path.sep)) {
+      for (const venvName of VENV_NAMES) {
+        const venvPath = path.join(dir, venvName)
+        for (const bin of ['python3', 'python']) {
+          const pyBin = path.join(venvPath, 'bin', bin)
+          try {
+            await fs.promises.access(pyBin, fs.constants.X_OK)
+            let isUv = false
+            try { await fs.promises.access(path.join(dir, 'uv.lock')); isUv = true } catch {}
+            return { subdir: dir, pythonPath: pyBin, venvPath, isUv }
+          } catch {}
+        }
+        const winBin = path.join(venvPath, 'Scripts', 'python.exe')
+        try {
+          await fs.promises.access(winBin)
+          return { subdir: dir, pythonPath: winBin, venvPath, isUv: false }
+        } catch {}
+      }
+      if (dir === trustedRoot) break
+      const parent = path.dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+    return null
   })
 
   ipcMain.handle('detect_venv', (_event, args) => {
