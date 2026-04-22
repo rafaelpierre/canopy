@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build Canopy for Linux (RHEL 8 compatible) using Docker/Podman.
-# Outputs: dist/linux/canopy-linux-<arch>.tar.gz
+# Build Canopy for Linux (RHEL 8 / Fedora compatible) using Docker/Podman.
+# Outputs: dist/linux/fedora-<arch>-<version>.tar.gz
 #
 # Usage:
 #   ./scripts/build-linux-rhel8.sh              # arm64 (default)
@@ -15,6 +15,9 @@ OUTPUT_DIR="$PROJECT_DIR/dist/linux"
 
 PLATFORM="${PLATFORM:-linux/arm64}"
 ARCH="${PLATFORM##*/}"   # arm64 or amd64
+ARCH_SHORT="${ARCH/amd64/x64}"
+ARCH_SHORT="${ARCH_SHORT/arm64/arm}"
+VERSION="$(node -p "require('$PROJECT_DIR/package.json').version")"
 
 # Use podman if available, otherwise docker
 CMD="${CONTAINER_CMD:-$(command -v podman || command -v docker)}"
@@ -35,7 +38,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # Create a temporary container and copy out the tarball
 CONTAINER_ID=$($CMD create canopy-linux-builder)
-$CMD cp "$CONTAINER_ID:/app/dist-electron/canopy-linux-${ARCH}.tar.gz" "$OUTPUT_DIR/"
+$CMD cp "$CONTAINER_ID:/app/dist-electron/canopy-linux-${ARCH}.tar.gz" "$OUTPUT_DIR/fedora-${ARCH_SHORT}-${VERSION}.tar.gz"
 $CMD rm "$CONTAINER_ID" > /dev/null
 
 echo ""

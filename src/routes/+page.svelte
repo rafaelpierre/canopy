@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import '$lib/global.css'
-  import { basename } from '$lib/path'
   import FileTree        from '$lib/FileTree.svelte'
   import Editor          from '$lib/Editor.svelte'
   import Terminal        from '$lib/Terminal.svelte'
@@ -11,27 +10,10 @@
   import DiagnosticsModal    from '$lib/DiagnosticsModal.svelte'
   import SaveDialog          from '$lib/SaveDialog.svelte'
   import type { SaveDialogType } from '$lib/SaveDialog.svelte'
-  import { fileIcon as _fileIcon, fileColor as _fileColor } from '$lib/file-icons'
   import { menuFocus, handleMenuKeydown } from '$lib/menu-utils'
-
-  const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
-
-  function onTabBarKeydown(e: KeyboardEvent) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-    const idx = _openTabs.indexOf(_openFilePath ?? '')
-    if (idx === -1) return
-    e.preventDefault()
-    const nextIdx = e.key === 'ArrowRight'
-      ? Math.min(idx + 1, _openTabs.length - 1)
-      : Math.max(idx - 1, 0)
-    switchTab(_openTabs[nextIdx])
-    tick().then(() => {
-      (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus()
-    })
-  }
-
-  function tabIconComponent(name: string) { return _fileIcon(name) }
-  function tabIconColor(name: string): string { return _fileColor(name) }
+  import TabBar from '$lib/TabBar.svelte'
+  import { findClosestVenv, createVenvManager } from '$lib/venv-utils'
+  import { scanWorkspace } from '$lib/lsp/manager'
 
   let mounted = $state(false)
   let error   = $state('')
@@ -219,7 +201,7 @@
     try {
       await mods.lspClient.start(root, adapter, pyCmd, lp ?? undefined)
       stores.lspStatus.set('ready')
-      scanWorkspace(root)
+      scanWorkspace(root, { invoke: mods.invoke, lspClient: mods.lspClient, stores })
     } catch {
       stores.lspStatus.set('error')
     }
@@ -244,64 +226,10 @@
     }
   }
 
-  /** Find the closest ancestor venv for a given file path. */
-  function findClosestVenv(filePath: string, venvList: any[]): any | null {
-    if (!filePath || !venvList.length) return null
-    const dir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : filePath
-    let best: any = null
-    let bestLen = -1
-    for (const v of venvList) {
-      if ((dir + '/').startsWith(v.subdir + '/') || dir === v.subdir) {
-        if (v.subdir.length > bestLen) {
-          bestLen = v.subdir.length
-          best = v
-        }
-      }
-    }
-    return best
-  }
+  let venvManager: ReturnType<typeof createVenvManager> | null = null
 
-  /** Run recursive venv discovery and populate the venvMap store. */
-  async function detectVenvRecursive(folder: string) {
-    try {
-      const list = await mods.invoke('detect_venv_recursive', { projectRoot: folder })
-      if (Array.isArray(list)) mods.stores.venvMap.set(list)
-    } catch (e) {
-      console.warn('[Canopy] detect_venv_recursive:', e)
-    }
-  }
-
-  /** Open all .py files in the LSP so it reports project-wide diagnostics. */
-  async function scanWorkspace(root: string): Promise<void> {
-    let paths: string[]
-    try {
-      paths = await mods.invoke('list_py_files', { root })
-    } catch (e) {
-      console.warn('[Canopy] scanWorkspace: list_py_files failed', e)
-      return
-    }
-    console.log(`[Canopy] scanWorkspace: opening ${paths.length} Python files in LSP`)
-    mods.stores.lspBusy.set(true)
-
-    const CONCURRENCY = 12
-    let idx = 0
-
-    async function worker(): Promise<void> {
-      while (idx < paths.length) {
-        if (!mods.lspClient.isReady()) return
-        const p = paths[idx++]
-        if (mods.lspClient.isOpen(p)) continue
-        try {
-          const content = await mods.invoke('read_file_content', { path: p })
-          if (mods.lspClient.isReady()) mods.lspClient.didOpen(p, content)
-        } catch { /* skip unreadable */ }
-      }
-    }
-
-    await Promise.all(Array.from({ length: CONCURRENCY }, worker))
-    mods.stores.lspBusy.set(false)
-    console.log('[Canopy] scanWorkspace: done')
-  }
+  function maybeScanForVenv(dir: string) { return venvManager?.maybeScanForVenv(dir) }
+  function preloadVenvCache(root: string) { venvManager?.preloadVenvCache(root) }
 
   /**
    * Start the LSP for an already-known project root, and subscribe to
@@ -331,6 +259,7 @@
       try {
         await mods.invoke('set_project_root', { root: lastProject })
         stores.projectRoot.set(lastProject)
+        preloadVenvCache(lastProject)
         // Restore tab session for the last project (guard prevents syncCurrentSession from firing)
         switchingProject = true
         try {
@@ -356,7 +285,7 @@
           stores.pythonCmd.set(venvPython)
           configureTyPython(lastProject, venvPython)
         }
-        detectVenvRecursive(lastProject)
+        venvManager?.clearScanCache()
         mods.invoke('watch_for_venv', { root: lastProject, recursive: true }).catch(() => {})
         await startLsp(lastProject, stores)
       } catch {
@@ -392,10 +321,14 @@
     }))
 
     // Auto-switch pythonCmd to the venv nearest to the active file (monorepo support).
+    // Also triggers a lazy shallow venv scan for the opened file's directory.
     // Only toasts when switching to a different venv, not on every file open.
     let _lastToastedVenvPath = ''
     unsubs.push(stores.openFilePath.subscribe((filePath: string | null) => {
       if (!filePath) return
+      // Lazy venv scan for the file's parent directory (non-blocking, deduped)
+      const dir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : filePath
+      maybeScanForVenv(dir)
       const venvList = mods.get(stores.venvMap) as any[]
       if (venvList.length < 2) return  // only auto-switch in monorepos with multiple envs
       const match = findClosestVenv(filePath, venvList)
@@ -580,6 +513,12 @@
 
       const { stores } = mods
 
+      venvManager = createVenvManager({ invoke: mods.invoke, get: mods.get, stores: {
+        projectRoot: stores.projectRoot,
+        venvMap:     stores.venvMap,
+        venvScanning: stores.venvScanning,
+      }})
+
       // --- Store mirror subscriptions ---
       unsubs.push(stores.projectRoot.subscribe((v: any) => { _projectRoot = v }))
       unsubs.push(stores.openFilePath.subscribe((v: any) => { _openFilePath = v }))
@@ -750,6 +689,7 @@
 
       mods.stores.projectRoot.set(folder)
       mods.stores.venvMap.set([])
+      preloadVenvCache(folder)
       watchConfigFiles(folder)
 
       // Restore saved session for the new folder.
@@ -771,7 +711,7 @@
       if (myGen === switchGen) switchingProject = false
     }
 
-    // Auto-detect venv (root-level fast path, then full recursive scan)
+    // Auto-detect venv (root-level fast path only; subdirectory venvs found lazily)
     try {
       const detectedPython = await mods.invoke('detect_venv', { projectRoot: folder })
       if (detectedPython) {
@@ -782,7 +722,7 @@
     } catch (e) {
       console.warn('detect_venv:', e)
     }
-    detectVenvRecursive(folder)
+    venvManager?.clearScanCache()
     mods.invoke('watch_for_venv', { root: folder, recursive: true }).catch(() => {})
 
     // Start LSP
@@ -797,7 +737,7 @@
       await mods.lspClient.start(folder, adapter, pyCmd, lp ?? undefined)
       console.log('[Canopy] LSP started successfully')
       mods.stores.lspStatus.set('ready')
-      scanWorkspace(folder)
+      scanWorkspace(folder, { invoke: mods.invoke, lspClient: mods.lspClient, stores: mods.stores })
     } catch (e) {
       console.error('[Canopy] LSP start failed:', e)
       mods.stores.lspStatus.set('error')
@@ -914,43 +854,21 @@
     {#if _showFileTree && _projectRoot}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="panel filetree" onmousedown={() => mods?.stores?.focusedPane?.set('tree')}>
-        <FileTree />
+        <FileTree onFolderExpand={maybeScanForVenv} />
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="resize-v" onmousedown={startResizeTree}></div>
     {/if}
 
     <div class="editor-col">
-      <!-- Tab bar -->
-      <!-- svelte-ignore a11y_interactive_supports_focus -->
-      <div class="tab-bar" role="tablist" onkeydown={onTabBarKeydown}>
-        {#if _openTabs.length > 0}
-          {#each _openTabs as tab}
-            {@const tabName = basename(tab)}
-            {@const TabIcon = tabIconComponent(tabName)}
-            <div
-              role="tab"
-              tabindex={tab === _openFilePath ? 0 : -1}
-              aria-selected={tab === _openFilePath}
-              class="tab"
-              class:active={tab === _openFilePath}
-              class:dirty={_dirtyTabs.has(tab)}
-              onclick={() => switchTab(tab)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchTab(tab) } }}
-              oncontextmenu={(e) => onTabContextMenu(e, tab)}
-            >
-              {#if _dirtyTabs.has(tab)}<span class="dirty-dot" aria-label="unsaved">●</span>{/if}
-              <span class="tab-icon" style="color:{tabIconColor(tabName)}"><TabIcon size={12} strokeWidth={1.5} /></span>
-              <span class="tab-name">{tabName}</span>
-              <button class="tab-close" aria-label="Close {tabName}" onclick={(e) => closeTab(tab, e)}>×</button>
-            </div>
-          {/each}
-        {:else if _projectRoot}
-          <span class="tab-hint">{isMac ? 'Cmd' : 'Ctrl'}+O to open a folder</span>
-        {:else}
-          <span class="tab-hint">{isMac ? 'Cmd' : 'Ctrl'}+O to open a folder</span>
-        {/if}
-      </div>
+      <TabBar
+        tabs={_openTabs}
+        activeTab={_openFilePath}
+        dirtyTabs={_dirtyTabs}
+        onTabClick={switchTab}
+        onTabClose={closeTab}
+        onTabContextMenu={onTabContextMenu}
+      />
 
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="editor-focus-wrap" onmousedown={() => mods.stores.focusedPane.set('editor')}>
@@ -1041,34 +959,6 @@
 
   .editor-col { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; background:var(--bg-statusbar); }
   .editor-focus-wrap { flex:1; display:flex; flex-direction:column; overflow:hidden; }
-
-  /* Tab bar */
-  .tab-bar {
-    display:flex; align-items:stretch; height:32px; background:var(--bg-statusbar);
-    border-bottom:1px solid var(--border); flex-shrink:0; overflow-x:auto; overflow-y:hidden;
-  }
-  .tab-bar::-webkit-scrollbar { height:0; }
-  .tab-hint { display:flex; align-items:center; padding:0 14px; font-size:11px; color:var(--text-muted); }
-  .tab {
-    display:flex; align-items:center; gap:6px; padding:0 12px;
-    font-size:11px; color:var(--text-secondary); cursor:pointer;
-    border-right:1px solid var(--border); white-space:nowrap;
-    transition:background .08s; flex-shrink:0;
-  }
-  .tab:hover { background:var(--bg-hover); }
-  .tab.active { background:var(--bg-editor); color:var(--text-primary); border-bottom:1px solid var(--accent); margin-bottom:-1px; }
-  .tab-name { pointer-events:none; }
-  .tab-icon { display:flex; align-items:center; flex-shrink:0; pointer-events:none; }
-  .dirty-dot {
-    font-size: 7px; color: var(--accent); opacity: 0.75; flex-shrink: 0;
-    line-height: 1; pointer-events: none;
-  }
-  .tab-close {
-    font-size:14px; line-height:1; color:var(--text-muted); cursor:pointer;
-    border-radius:3px; width:16px; height:16px; display:flex; align-items:center; justify-content:center;
-    background: none; border: none; padding: 0;
-  }
-  .tab-close:hover { background:var(--bg-hover); color:var(--text-primary); }
 
   .term-panel { flex-shrink:0; overflow:hidden; }
 

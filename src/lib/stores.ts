@@ -22,6 +22,7 @@ export const pythonCmd        = writable<string>('python3')
 export const venvMap          = writable<VenvInfo[]>([])
 export const lspStatus        = writable<'stopped' | 'starting' | 'ready' | 'error'>('stopped')
 export const lspBusy          = writable<boolean>(false)
+export const venvScanning     = writable<boolean>(false)
 export interface DiagnosticItem {
   severity:        number   // 8=error, 4=warning (Monaco severity)
   message:         string

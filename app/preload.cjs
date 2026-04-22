@@ -10,7 +10,7 @@ const ALLOWED_INVOKE = new Set([
   'load_prefs', 'save_prefs', 'list_shells',
   'dialog:openFolder', 'dialog:openFile',
   'watch_file', 'unwatch_file',
-  'watch_project', 'unwatch_project',
+  'watch_project', 'unwatch_project', 'dir_mtime',
   'create_file', 'create_dir', 'delete_path', 'rename_path',
   'window_minimize', 'window_maximize', 'window_close',
   'app:confirm-quit', 'app:cancel-quit',

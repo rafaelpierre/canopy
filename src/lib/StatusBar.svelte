@@ -10,6 +10,7 @@
   let _diagByUri       = $state<Map<string, any[]>>(new Map())
   let _lspStatus       = $state<string>('stopped')
   let _lspBusy         = $state(false)
+  let _venvScanning    = $state(false)
   let _installing      = $state(false)
   let _installPending  = $state<string | null>(null)  // lspId awaiting confirmation
   let _openFile        = $state<string | null>(null)
@@ -49,6 +50,7 @@
     }))
     _unsubs.push(stores.lspStatus.subscribe((v: any) => { _lspStatus = v }))
     _unsubs.push(stores.lspBusy.subscribe((v: any) => { _lspBusy = v }))
+    _unsubs.push(stores.venvScanning.subscribe((v: any) => { _venvScanning = v }))
     _unsubs.push(stores.openFilePath.subscribe((v: any) => {
       _openFile = v
       recomputeFileCounts(_diagByUri, v)
@@ -186,7 +188,7 @@
   <div class="center"></div>
 
   <div class="right">
-    {#if _diagnostics.errors === 0 && _diagnostics.warnings === 0 && _openFile}
+    {#if _diagnostics.errors === 0 && _diagnostics.warnings === 0 && _openFile && _lspStatus === 'ready'}
       <span class="item ok">✓</span>
     {:else if _diagnostics.errors > 0 || _diagnostics.warnings > 0}
       <button class="diag-pill clickable" onclick={() => stores?.showDiagnosticsModal?.set(true)} title="Show all diagnostics">
@@ -196,6 +198,13 @@
           <span class="file-diag">({[_fileErrors > 0 ? `${_fileErrors}e` : '', _fileWarnings > 0 ? `${_fileWarnings}w` : ''].filter(Boolean).join(' ')} here)</span>
         {/if}
       </button>
+    {/if}
+
+    {#if _venvScanning}
+      <span class="item venv-scan-status" title="Scanning for virtual environments…">
+        <span class="lsp-spinner"></span>
+        <span>activating .venv…</span>
+      </span>
     {/if}
 
     <button class="item lsp-status clickable" class:ready={_lspStatus === 'ready'} class:lsp-error={_lspStatus === 'error'} onclick={showLspMenu} title="Click to switch LSP">
@@ -317,6 +326,8 @@
 
   .venv-menu { position: fixed; z-index: 9999; }
   .venv-sep  { margin: 3px 0; border: none; border-top: 1px solid var(--border); }
+
+  .venv-scan-status { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11px; }
 
   .lsp-status       { display: flex; align-items: center; gap: 5px; color: var(--text-muted); }
   .lsp-status.ready { color: var(--text-secondary); }

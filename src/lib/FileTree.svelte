@@ -5,8 +5,13 @@
   import FolderOpenIcon    from 'lucide-svelte/icons/folder-open'
   import FolderIcon        from 'lucide-svelte/icons/folder'
   import FileIcon          from 'lucide-svelte/icons/file'
+  import { get } from 'svelte/store'
   import { fileIcon, fileColor } from './file-icons'
   import { menuFocus, handleMenuKeydown } from './menu-utils'
+  import { parseGitignore, type GitignoreRule } from './gitignore'
+
+  interface Props { onFolderExpand?: (path: string) => void }
+  let { onFolderExpand }: Props = $props()
 
   interface FileEntry {
     name:      string
@@ -38,41 +43,7 @@
   let warningPaths = $state(new Set<string>())
 
   // Gitignore
-  interface GitignoreRule { regex: RegExp; negated: boolean; dirOnly: boolean }
   let gitignoreRules: GitignoreRule[] = $state([])
-
-  function gitPatternToRegex(pattern: string, anchored: boolean): RegExp {
-    const s = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex specials
-      .replace(/\*\*/g, '\x01')              // placeholder for **
-      .replace(/\*/g, '[^/]*')               // * → within-segment wildcard
-      .replace(/\x01/g, '.*')               // ** → cross-segment wildcard
-      .replace(/\?/g, '[^/]')               // ? → single char
-    if (anchored || pattern.includes('/')) {
-      // Match from repo root
-      return new RegExp('^' + s + '(/.*)?$')
-    } else {
-      // No slash → match against any path component
-      return new RegExp('(^|/)' + s + '(/.*)?$')
-    }
-  }
-
-  function parseGitignore(content: string): GitignoreRule[] {
-    const rules: GitignoreRule[] = []
-    for (let line of content.split('\n')) {
-      line = line.trim()
-      if (!line || line.startsWith('#')) continue
-      const negated = line.startsWith('!')
-      if (negated) line = line.slice(1).trim()
-      const dirOnly = line.endsWith('/')
-      if (dirOnly) line = line.slice(0, -1)
-      const anchored = line.startsWith('/')
-      if (anchored) line = line.slice(1)
-      if (!line) continue
-      try { rules.push({ regex: gitPatternToRegex(line, anchored), negated, dirOnly }) } catch {}
-    }
-    return rules
-  }
 
   let _ignoredCache = new Map<string, boolean>()
   let _ignoredCacheRules: GitignoreRule[] | null = null
@@ -155,7 +126,6 @@
   onMount(async () => {
     const ipcMod    = await import('$lib/ipc')
     const storesMod = await import('./stores')
-    const { get }   = await import('svelte/store')
     invoke = ipcMod.invoke
     stores = storesMod
 
@@ -239,10 +209,10 @@
           childrenMap = new Map(childrenMap)
         }
         expanded.add(entry.path)
+        onFolderExpand?.(entry.path)
       }
       expanded = new Set(expanded)
     } else {
-      const { get } = await import('svelte/store')
       const tabs = get(stores.openTabs) as string[]
       if (!tabs.includes(entry.path)) stores.openTabs.set([...tabs, entry.path])
       stores.openFilePath.set(entry.path)
@@ -299,7 +269,6 @@
       if (creating.kind === 'file') {
         await invoke('create_file', { path: newPath })
         await loadTree(projectRoot!)
-        const { get } = await import('svelte/store')
         const tabs = get(stores.openTabs) as string[]
         if (!tabs.includes(newPath)) stores.openTabs.set([...tabs, newPath])
         stores.openFilePath.set(newPath)
@@ -338,7 +307,6 @@
     if (!confirm(`Delete ${label}?`)) return
     try {
       if (stores) {
-        const { get } = await import('svelte/store')
         const openTabs = get(stores.openTabs) as string[]
         const openFile = get(stores.openFilePath) as string | null
         const toClose  = openTabs.filter(t => t === entry.path || t.startsWith(entry.path + '/'))
@@ -367,7 +335,6 @@
     try {
       await invoke('rename_path', { src: entry.path, dst })
       if (stores) {
-        const { get } = await import('svelte/store')
         const openTabs = get(stores.openTabs) as string[]
         const openFile = get(stores.openFilePath) as string | null
         const updated  = openTabs.map(t =>

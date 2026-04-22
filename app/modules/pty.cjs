@@ -71,7 +71,7 @@ function registerPtyHandlers(ipcMain, mainWindow) {
         flushScheduled = true
         setImmediate(() => {
           if (pendingData && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('pty:data', { id, data: Buffer.from(pendingData).toString('base64') })
+            mainWindow.webContents.send('pty:data', { id, data: Buffer.from(pendingData) })
           }
           pendingData = ''
           flushScheduled = false

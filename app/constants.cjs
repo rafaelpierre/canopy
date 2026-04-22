@@ -1,6 +1,9 @@
 const IGNORED_DIRS = new Set([
   '.git', 'node_modules', '__pycache__', '.venv', 'venv',
   '.mypy_cache', '.pytest_cache', '.ruff_cache', 'target', '.DS_Store',
+  'dist', 'build', '.tox', 'htmlcov', 'eggs', '.eggs',
+  'site-packages', 'dist-packages', '__pypackages__',
+  '.hg', '.svn', 'CVS',
 ])
 
 const VENV_NAMES = ['.venv', 'venv', '.env', 'env']

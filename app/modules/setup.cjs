@@ -165,43 +165,50 @@ function registerSetupHandlers(ipcMain) {
     const { getProjectRoot } = require('./fs.cjs')
     const trustedRoot = getProjectRoot()
     const resolved = path.resolve(root)
-    if (trustedRoot && resolved !== trustedRoot) return []
+    if (trustedRoot && resolved !== trustedRoot && !resolved.startsWith(trustedRoot + path.sep)) return []
     const { VENV_NAMES, IGNORED_DIRS } = require('../constants.cjs')
 
+    const venvNameSet = new Set(VENV_NAMES)
     const results = []
     const seen = new Set()
+
+    async function fileAccessible(p) {
+      try { await fs.promises.access(p, fs.constants.X_OK); return true } catch { return false }
+    }
 
     async function walk(dir, depth) {
       if (depth > maxDepth) return
       let entries
       try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
-      const subdirs = []
+      const tasks = []
       for (const entry of entries) {
         if (!entry.isDirectory()) continue
         const name = entry.name
         const fullPath = path.join(dir, name)
-        if (VENV_NAMES.includes(name)) {
+        if (venvNameSet.has(name)) {
           if (seen.has(fullPath)) continue
           seen.add(fullPath)
-          let pythonPath = null
-          for (const bin of ['python3', 'python']) {
-            const candidate = path.join(fullPath, 'bin', bin)
-            if (fs.existsSync(candidate)) { pythonPath = candidate; break }
-          }
-          if (!pythonPath) {
-            const winCandidate = path.join(fullPath, 'Scripts', 'python.exe')
-            if (fs.existsSync(winCandidate)) pythonPath = winCandidate
-          }
-          if (pythonPath) {
-            const isUv = fs.existsSync(path.join(dir, 'uv.lock'))
-            results.push({ subdir: dir, pythonPath, venvPath: fullPath, isUv })
-          }
+          tasks.push((async () => {
+            let pythonPath = null
+            for (const bin of ['python3', 'python']) {
+              const candidate = path.join(fullPath, 'bin', bin)
+              if (await fileAccessible(candidate)) { pythonPath = candidate; break }
+            }
+            if (!pythonPath) {
+              const winCandidate = path.join(fullPath, 'Scripts', 'python.exe')
+              if (await fileAccessible(winCandidate)) pythonPath = winCandidate
+            }
+            if (pythonPath) {
+              const isUv = await fileAccessible(path.join(dir, 'uv.lock'))
+              results.push({ subdir: dir, pythonPath, venvPath: fullPath, isUv })
+            }
+          })())
           continue
         }
         if (IGNORED_DIRS.has(name)) continue
-        subdirs.push(walk(fullPath, depth + 1))
+        tasks.push(walk(fullPath, depth + 1))
       }
-      await Promise.all(subdirs)
+      await Promise.all(tasks)
     }
 
     await walk(resolved, 0)

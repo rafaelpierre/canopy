@@ -31,6 +31,10 @@
   let activeTab  = $state(-1)
   let nextId     = 0
 
+  // O(1) PTY dispatch maps — updated in addTab/splitTab/killTab/closeSplit
+  const instanceById = new Map<number, TermInstance>()
+  const tabByMainId  = new Map<number, TermTab>()
+
   // Terminal tab context menu
   let termCtxMenu: { x: number; y: number; id: number } | null = $state(null)
 
@@ -138,10 +142,13 @@
   }
 
   function killTab(tab: TermTab) {
+    instanceById.delete(tab.main.id)
+    tabByMainId.delete(tab.main.id)
     tab.main.spawned = false
     tab.main.term.dispose()
     invoke?.('pty_kill', { id: tab.main.id }).catch(() => {})
     if (tab.split) {
+      instanceById.delete(tab.split.id)
       tab.split.spawned = false
       tab.split.term.dispose()
       invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
@@ -158,6 +165,8 @@
     const id   = nextId++
     const inst = buildInstance(id)
     const tab: TermTab = { id, title: 'shell', main: inst, activeSide: 'main' }
+    instanceById.set(inst.id, inst)
+    tabByMainId.set(inst.id, tab)
     tabs = [...tabs, tab]
     activeTab = id
 
@@ -178,6 +187,7 @@
 
     const splitId = nextId++
     const inst    = buildInstance(splitId)
+    instanceById.set(inst.id, inst)
 
     // Assign temporarily to trigger DOM element render
     tab.split = inst
@@ -198,6 +208,7 @@
   function closeSplit(tabId: number) {
     const tab = tabs.find(t => t.id === tabId)
     if (!tab?.split) return
+    instanceById.delete(tab.split.id)
     tab.split.spawned = false
     tab.split.term.dispose()
     invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
@@ -263,25 +274,19 @@
       if (cachedPrefs.preferred_shell) preferredShell = cachedPrefs.preferred_shell
     } catch {}
 
-    // PTY data → correct terminal instance (global listener filtered by id)
+    // PTY data → correct terminal instance via O(1) map lookup
     ipcMod.listen('pty:data', (e: any) => {
-      const { id, data } = e.payload as { id: number; data: string }
-      const bytes = Uint8Array.from(atob(data), (c: string) => c.charCodeAt(0))
-
-      for (const tab of tabs) {
-        if (tab.main.id === id) {
-          tab.main.term.write(bytes)
-          const cwd = parseOsc7(bytes)
-          if (cwd) {
-            const cwdName = (cwd.split('/').pop() || cwd).replace(/[^\x20-\x7E -￿]/g, '')
-            tab.title = shellBasename(preferredShell) ? `${shellBasename(preferredShell)}: ${cwdName}` : cwdName
-            tabs = [...tabs]
-          }
-          return
-        }
-        if (tab.split?.id === id) {
-          tab.split.term.write(bytes)
-          return
+      const { id, data } = e.payload as { id: number; data: Uint8Array }
+      const inst = instanceById.get(id)
+      if (!inst) return
+      inst.term.write(data)
+      const mainTab = tabByMainId.get(id)
+      if (mainTab) {
+        const cwd = parseOsc7(data)
+        if (cwd) {
+          const cwdName = (cwd.split('/').pop() || cwd).replace(/[^\x20-\x7E -￿]/g, '')
+          mainTab.title = shellBasename(preferredShell) ? `${shellBasename(preferredShell)}: ${cwdName}` : cwdName
+          tabs = [...tabs]
         }
       }
     }).then((u: any) => cleanups.push(u))

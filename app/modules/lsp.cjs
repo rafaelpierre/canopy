@@ -163,7 +163,10 @@ function registerLspHandlers(ipcMain, mainWindow) {
     })
 
     lspProcess.stderr.on('data', (chunk) => {
-      console.error('[LSP stderr]', chunk.toString())
+      const text = chunk.toString()
+      // ty logs internal perf warnings to stderr that are not actionable from here
+      if (text.includes('took more than') && text.includes('ms')) return
+      console.error('[LSP stderr]', text)
     })
 
     lspProcess.on('error', (err) => {
@@ -183,9 +186,9 @@ function registerLspHandlers(ipcMain, mainWindow) {
 
   ipcMain.handle('lsp_send', (_event, args) => {
     if (!lspStdin) throw new Error('LSP not running')
-    let parsed
-    try { parsed = JSON.parse(args.message) } catch { throw new Error('lsp_send: invalid JSON') }
-    if (parsed.jsonrpc !== '2.0') throw new Error('lsp_send: not JSON-RPC 2.0')
+    if (typeof args.message !== 'string' || !args.message.includes('"jsonrpc":"2.0"')) {
+      throw new Error('lsp_send: invalid JSON-RPC 2.0 message')
+    }
     writeLspMessage(lspStdin, args.message)
   })
 

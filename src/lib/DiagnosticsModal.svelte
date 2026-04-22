@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onDestroy } from 'svelte'
   import { get } from 'svelte/store'
   import { diagnosticsByUri, openFilePath } from './stores'
   import type { DiagnosticItem } from './stores'
@@ -28,26 +28,6 @@
   let warnings  = $derived(allItems.filter(i => i.severity === 4))
   let items     = $derived(activeTab === 'errors' ? errors : warnings)
   let visibleItems = $derived(items.slice(0, visibleCount))
-
-  let unsubDiagnostics: (() => void) | null = null
-
-  onMount(() => {
-    unsubDiagnostics = diagnosticsByUri.subscribe((map: Map<string, DiagnosticItem[]>) => {
-      if (!open) return
-      const flat: DiagnosticItem[] = []
-      for (const uriItems of map.values()) flat.push(...uriItems)
-      allItems = flat.sort((a, b) => {
-        if (a.severity !== b.severity) return b.severity - a.severity
-        if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath)
-        return a.startLineNumber - b.startLineNumber
-      })
-      selectedIndex = 0
-    })
-  })
-
-  onDestroy(() => {
-    unsubDiagnostics?.()
-  })
 
   $effect(() => {
     if (open) {

@@ -1,7 +1,12 @@
 const fs = require('node:fs')
 const path = require('node:path')
-const { execFileSync } = require('node:child_process')
+const { execFile } = require('node:child_process')
+const { promisify } = require('node:util')
+const execFileAsync = promisify(execFile)
 const { safeEnvObject } = require('../constants.cjs')
+
+// Cache sys.path results per interpreter — these don't change between calls
+const _pythonPathsCache = new Map()
 
 let projectRoot = null
 
@@ -333,18 +338,38 @@ function registerFsHandlers(ipcMain, mainWindow) {
   ipcMain.handle('get_python_paths', async (_event, args) => {
     const pythonBin = args?.pythonPath
     if (typeof pythonBin !== 'string' || !path.isAbsolute(pythonBin)) return []
-    try { if (!fs.statSync(pythonBin).isFile()) return [] } catch { return [] }
+    if (_pythonPathsCache.has(pythonBin)) return _pythonPathsCache.get(pythonBin)
+    try { if (!(await fs.promises.stat(pythonBin)).isFile()) return [] } catch { return [] }
     try {
-      const out = execFileSync(
+      const { stdout } = await execFileAsync(
         pythonBin,
         ['-c', 'import sys,json;print(json.dumps([p for p in sys.path if p]))'],
         { timeout: 5000, env: safeEnvObject({}) },
       )
-      const paths = JSON.parse(out.toString().trim())
-      return Array.isArray(paths)
+      const paths = JSON.parse(stdout.trim())
+      const result = Array.isArray(paths)
         ? paths.filter(p => typeof p === 'string' && path.isAbsolute(p))
         : []
+      _pythonPathsCache.set(pythonBin, result)
+      return result
     } catch { return [] }
+  })
+
+  // Return { mtime, entryCount } for a directory — composite fingerprint for venv scan cache.
+  ipcMain.handle('dir_mtime', async (_event, args) => {
+    const dirPath = args?.path
+    if (typeof dirPath !== 'string' || !path.isAbsolute(dirPath)) return null
+    const trustedRoot = getProjectRoot()
+    const resolved = path.resolve(dirPath)
+    if (trustedRoot && resolved !== trustedRoot && !resolved.startsWith(trustedRoot + path.sep)) return null
+    try {
+      const [stat, entries] = await Promise.all([
+        fs.promises.stat(resolved),
+        fs.promises.readdir(resolved),
+      ])
+      if (!stat.isDirectory()) return null
+      return { mtime: stat.mtimeMs, entryCount: entries.length }
+    } catch { return null }
   })
 
   // List a directory that's known to be under one of the caller's Python search paths.
