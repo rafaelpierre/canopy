@@ -253,7 +253,8 @@
       stores.diagnosticsByUri.set(new Map())
       try { await mods.lspClient.stop() } catch {}
       if (switchId !== lspSwitchId) return
-      await startLsp(root, stores)
+      // Fire-and-forget: LSP startup runs in the background; status bar handles state transitions
+      startLsp(root, stores)
     }))
 
     // Restore last project
@@ -283,7 +284,9 @@
         }
         watchConfigFiles(lastProject)
         venvManager?.clearMemo()
-        await startLsp(lastProject, stores)
+        // Fire-and-forget: LSP init runs in background; UI stays responsive.
+        // startLsp's own try/catch sets lspStatus to 'error' on failure.
+        startLsp(lastProject, stores)
       } catch {
         stores.lspStatus.set('error')
       }
@@ -684,23 +687,26 @@
 
     venvManager?.clearMemo()
 
-    // Start LSP
+    // Start LSP in the background — do NOT await. UI remains responsive; status bar
+    // observes lspStatus transitions (starting → ready | error).
     mods.stores.lspStatus.set('starting')
     mods.stores.diagnosticsByUri.set(new Map())
-    try {
-      const activeLspId = mods.get(mods.stores.activeLsp)
-      const adapter = mods.adapters[activeLspId]
-      const lp = adapter.id === 'basedpyright' ? mods.get(mods.stores.langserverPath) : null
-      console.log('[Canopy] starting LSP:', activeLspId, 'langserver:', lp)
-      const pyCmd = mods.get(mods.stores.pythonCmd)
-      await mods.lspClient.start(folder, adapter, pyCmd, lp ?? undefined)
-      console.log('[Canopy] LSP started successfully')
-      mods.stores.lspStatus.set('ready')
-      scanWorkspace(folder, { invoke: mods.invoke, lspClient: mods.lspClient, stores: mods.stores })
-    } catch (e) {
-      console.error('[Canopy] LSP start failed:', e)
-      mods.stores.lspStatus.set('error')
-    }
+    ;(async () => {
+      try {
+        const activeLspId = mods.get(mods.stores.activeLsp)
+        const adapter = mods.adapters[activeLspId]
+        const lp = adapter.id === 'basedpyright' ? mods.get(mods.stores.langserverPath) : null
+        console.log('[Canopy] starting LSP:', activeLspId, 'langserver:', lp)
+        const pyCmd = mods.get(mods.stores.pythonCmd)
+        await mods.lspClient.start(folder, adapter, pyCmd, lp ?? undefined)
+        console.log('[Canopy] LSP started successfully')
+        mods.stores.lspStatus.set('ready')
+        scanWorkspace(folder, { invoke: mods.invoke, lspClient: mods.lspClient, stores: mods.stores })
+      } catch (e) {
+        console.error('[Canopy] LSP start failed:', e)
+        mods.stores.lspStatus.set('error')
+      }
+    })()
   }
 
   // --- Keyboard shortcuts ---
