@@ -55,6 +55,8 @@
   // Command palette
   let paletteOpen = $state(false)
   let paletteMode: 'file' | 'command' = $state('file')
+  let _paletteIndexedRoot: string | null = null
+  let _paletteIndexing = $state(false)
 
   // Diagnostics modal
   let diagnosticsOpen = $state(false)
@@ -502,13 +504,11 @@
       unsubs.push(stores.setupStatus.subscribe((v: any) => {
         if (v) { _setupReady = v.ready; _setupMessage = v.message }
       }))
-      // File index for command palette
-      let gatherGen = 0
-      unsubs.push(stores.projectRoot.subscribe(async (root: string | null) => {
-        if (!root) { allFiles = []; return }
-        const gen = ++gatherGen
-        const files = await gatherFiles(root)
-        if (gen === gatherGen) allFiles = files
+      // File index for command palette — built LAZILY when the palette first opens.
+      // Eagerly walking the whole tree on project open freezes the UI on huge monorepos.
+      unsubs.push(stores.projectRoot.subscribe((root: string | null) => {
+        allFiles = []
+        _paletteIndexedRoot = null
       }))
 
       // --- Prefs: load + auto-save ---
@@ -752,9 +752,26 @@
 
   // --- Command Palette ---
 
-  function openPalette(m: 'file' | 'command' = 'file') {
+  async function openPalette(m: 'file' | 'command' = 'file') {
     paletteMode = m
     paletteOpen = true
+    // Lazily build file index on first open per project — NOT at startup
+    if (m === 'file') {
+      const root = mods.get(mods.stores.projectRoot) as string | null
+      if (root && _paletteIndexedRoot !== root && !_paletteIndexing) {
+        _paletteIndexing = true
+        try {
+          const files = await gatherFiles(root)
+          // Only apply if still on same project and still open
+          if (mods.get(mods.stores.projectRoot) === root) {
+            allFiles = files
+            _paletteIndexedRoot = root
+          }
+        } finally {
+          _paletteIndexing = false
+        }
+      }
+    }
   }
   function closePalette() { paletteOpen = false }
 

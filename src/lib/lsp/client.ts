@@ -87,7 +87,8 @@ class LspClient {
       pythonPath:     pythonPath || undefined,
     })
 
-    // LSP handshake
+    // LSP handshake — give the server generous time (large monorepos can
+    // take much longer than the default 10s request timeout to initialize).
     const initResult = await this.request('initialize', {
       processId:  null,
       rootUri:    pathToUri(rootPath),
@@ -144,7 +145,7 @@ class LspClient {
       },
       initializationOptions: adapter.initOptions(this._pythonPath, rootPath),
       workspaceFolders: [{ uri: pathToUri(rootPath), name: 'workspace' }],
-    })
+    }, 120_000)  // 2 min — basedpyright on huge monorepos can take this long to index
 
     // Capture the server's semantic token legend
     const legend = initResult?.capabilities?.semanticTokensProvider?.legend
