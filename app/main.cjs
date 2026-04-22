@@ -8,6 +8,10 @@ nativeTheme.themeSource = 'dark'
 // Force GTK dark theme on Linux so the title bar matches
 if (process.platform === 'linux') {
   process.env.GTK_THEME = process.env.GTK_THEME || 'Adwaita:dark'
+  // Some Linux environments (containers, minimal installs) lack /dev/shm.
+  // Chromium fatals on startup without it; this flag redirects shared memory
+  // to /tmp instead. Must be called before app.whenReady().
+  app.commandLine.appendSwitch('disable-dev-shm-usage')
 }
 
 let mainWindow = null
