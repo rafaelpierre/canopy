@@ -135,6 +135,7 @@
     } else {
       previousFocus?.focus()
       previousFocus = null
+      _findCache = null
     }
   })
 
@@ -340,12 +341,17 @@
 
   // --- In-file search ---
 
+  let _findCache: { path: string; lines: string[] } | null = null
+
   function searchCurrentFile(q: string) {
     if (!q.trim()) { fileHits = []; return }
     const file = onGetCurrentFileContent()
     if (!file) { fileHits = []; return }
+    if (!_findCache || _findCache.path !== file.path) {
+      _findCache = { path: file.path, lines: file.content.split('\n') }
+    }
     const lower = q.toLowerCase()
-    const lines = file.content.split('\n')
+    const lines = _findCache.lines
     const hits: FileHit[] = []
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].toLowerCase().includes(lower)) {

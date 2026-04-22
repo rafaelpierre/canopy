@@ -209,19 +209,23 @@
     }
   }
 
-  async function restartLsp(root: string) {
-    const activeLspId = mods.get(mods.stores.activeLsp)
+  async function startLsp(root: string, stores: any): Promise<void> {
+    const activeLspId = mods.get(stores.activeLsp)
     const adapter = mods.adapters[activeLspId]
-    const lp = adapter.id === 'basedpyright' ? mods.get(mods.stores.langserverPath) : null
-    const pyCmd = mods.get(mods.stores.pythonCmd)
-    mods.stores.lspStatus.set('starting')
-    mods.stores.diagnosticsByUri.set(new Map())
+    const lp = adapter.id === 'basedpyright' ? mods.get(stores.langserverPath) : null
+    const pyCmd = mods.get(stores.pythonCmd)
+    stores.lspStatus.set('starting')
+    stores.diagnosticsByUri.set(new Map())
     try {
       await mods.lspClient.start(root, adapter, pyCmd, lp ?? undefined)
-      mods.stores.lspStatus.set('ready')
+      stores.lspStatus.set('ready')
       scanWorkspace(root)
-    } catch { mods.stores.lspStatus.set('error') }
+    } catch {
+      stores.lspStatus.set('error')
+    }
   }
+
+  function restartLsp(root: string) { startLsp(root, mods.stores) }
 
   /**
    * If the active LSP is ty and a venv python is known, write [tool.ty.environment]
@@ -310,28 +314,16 @@
     // LSP switch subscription
     let lspInitialized = false
     let lspSwitchId = 0
-    unsubs.push(stores.activeLsp.subscribe(async (lspId: string) => {
+    unsubs.push(stores.activeLsp.subscribe(async (_lspId: string) => {
       if (!lspInitialized) { lspInitialized = true; return }  // skip initial value
       const root = mods.get(stores.projectRoot)
       if (!root) return
       const switchId = ++lspSwitchId
       stores.lspStatus.set('starting')
       stores.diagnosticsByUri.set(new Map())
-      try {
-        await mods.lspClient.stop()
-        if (switchId !== lspSwitchId) return
-        const adapter = mods.adapters[lspId]
-        const lp = adapter.id === 'basedpyright' ? mods.get(stores.langserverPath) : null
-        const pyCmd = mods.get(stores.pythonCmd)
-        await mods.lspClient.start(root, adapter, pyCmd, lp ?? undefined)
-        if (switchId !== lspSwitchId) return
-        stores.lspStatus.set('ready')
-        scanWorkspace(root)
-      } catch (e: any) {
-        if (switchId !== lspSwitchId) return
-        console.error('[Canopy] LSP restart failed:', e)
-        stores.lspStatus.set('error')
-      }
+      try { await mods.lspClient.stop() } catch {}
+      if (switchId !== lspSwitchId) return
+      await startLsp(root, stores)
     }))
 
     // Restore last project
@@ -366,14 +358,7 @@
         }
         detectVenvRecursive(lastProject)
         mods.invoke('watch_for_venv', { root: lastProject, recursive: true }).catch(() => {})
-        stores.lspStatus.set('starting')
-        const activeLspId = mods.get(stores.activeLsp)
-        const adapter = mods.adapters[activeLspId]
-        const lp = adapter.id === 'basedpyright' ? mods.get(stores.langserverPath) : null
-        const pyCmd = mods.get(stores.pythonCmd)
-        await mods.lspClient.start(lastProject, adapter, pyCmd, lp ?? undefined)
-        stores.lspStatus.set('ready')
-        scanWorkspace(lastProject)
+        await startLsp(lastProject, stores)
       } catch {
         stores.lspStatus.set('error')
       }
@@ -398,20 +383,11 @@
       showToast(`Using ${venvName}`)
       await configureTyPython(currentRoot, pythonPath)
       // Debounce LSP restart — watcher may send one event per file inside the venv
-      const activeLspId = mods.get(stores.activeLsp)
-      if (activeLspId !== 'ty') return
+      if (mods.get(stores.activeLsp) !== 'ty') return
       if (venvLspRestartTimer) clearTimeout(venvLspRestartTimer)
       venvLspRestartTimer = setTimeout(async () => {
         venvLspRestartTimer = null
-        const py = mods.get(stores.pythonCmd)
-        stores.lspStatus.set('starting')
-        stores.diagnosticsByUri.set(new Map())
-        try {
-          const adapter = mods.adapters['ty']
-          await mods.lspClient.start(currentRoot, adapter, py, undefined)
-          stores.lspStatus.set('ready')
-          scanWorkspace(currentRoot)
-        } catch { stores.lspStatus.set('error') }
+        await startLsp(currentRoot, stores)
       }, 800)
     }))
 

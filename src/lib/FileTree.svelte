@@ -74,12 +74,21 @@
     return rules
   }
 
+  let _ignoredCache = new Map<string, boolean>()
+  let _ignoredCacheRules: GitignoreRule[] | null = null
+
   function isIgnored(entry: FlatEntry): boolean {
     if (!gitignoreRules.length || !projectRoot) return false
+    if (_ignoredCacheRules !== gitignoreRules) {
+      _ignoredCache.clear()
+      _ignoredCacheRules = gitignoreRules
+    }
+    const cached = _ignoredCache.get(entry.path)
+    if (cached !== undefined) return cached
     const rel = entry.path.startsWith(projectRoot + '/')
       ? entry.path.slice(projectRoot.length + 1)
       : null
-    if (!rel) return false
+    if (!rel) { _ignoredCache.set(entry.path, false); return false }
     // Walk ancestor segments — if any ancestor is ignored, so is this entry
     const parts = rel.split('/')
     for (let d = 1; d <= parts.length; d++) {
@@ -90,8 +99,9 @@
         if (rule.dirOnly && !subIsDir) continue
         if (rule.regex.test(subRel)) ignored = !rule.negated
       }
-      if (ignored) return true
+      if (ignored) { _ignoredCache.set(entry.path, true); return true }
     }
+    _ignoredCache.set(entry.path, false)
     return false
   }
 
