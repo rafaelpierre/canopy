@@ -280,45 +280,12 @@
           switchingProject = false
         }
         watchConfigFiles(lastProject)
-        const venvPython = await mods.invoke('detect_venv', { projectRoot: lastProject }).catch(() => null)
-        if (venvPython) {
-          stores.pythonCmd.set(venvPython)
-          configureTyPython(lastProject, venvPython)
-        }
         venvManager?.clearMemo()
-        mods.invoke('watch_for_venv', { root: lastProject, recursive: true }).catch(() => {})
         await startLsp(lastProject, stores)
       } catch {
         stores.lspStatus.set('error')
       }
     }
-
-    // Watch for .venv appearing (at any depth) after project open.
-    // The watcher deduplicates, so this fires once per newly created venv.
-    let venvLspRestartTimer: any = null
-    unsubs.push(await mods.listen('venv:created', async ({ payload }: any) => {
-      const { root, pythonPath, venvPath } = payload
-      const currentRoot = mods.get(stores.projectRoot)
-      if (!root || !currentRoot) return
-      if (root !== currentRoot && !root.startsWith(currentRoot + '/')) return
-      console.log('[Canopy] venv:created:', pythonPath)
-      // Update venvMap
-      const currentList = mods.get(stores.venvMap) as any[]
-      if (!currentList.some((v: any) => v.pythonPath === pythonPath)) {
-        stores.venvMap.set([...currentList, { subdir: root, pythonPath, venvPath: venvPath ?? '', isUv: false }])
-      }
-      stores.pythonCmd.set(pythonPath)
-      const venvName = venvPath ? venvPath.split('/').pop() : '.venv'
-      showToast(`Using ${venvName}`)
-      await configureTyPython(currentRoot, pythonPath)
-      // Debounce LSP restart — watcher may send one event per file inside the venv
-      if (mods.get(stores.activeLsp) !== 'ty') return
-      if (venvLspRestartTimer) clearTimeout(venvLspRestartTimer)
-      venvLspRestartTimer = setTimeout(async () => {
-        venvLspRestartTimer = null
-        await startLsp(currentRoot, stores)
-      }, 800)
-    }))
 
     // Walk-up venv discovery: for each opened file, find the closest ancestor .venv
     // (bounded by project root) and auto-switch pythonCmd. O(depth) stats per file,
@@ -715,19 +682,7 @@
       if (myGen === switchGen) switchingProject = false
     }
 
-    // Auto-detect venv (root-level fast path only; subdirectory venvs found lazily)
-    try {
-      const detectedPython = await mods.invoke('detect_venv', { projectRoot: folder })
-      if (detectedPython) {
-        console.log('[Canopy] detected venv python:', detectedPython)
-        mods.stores.pythonCmd.set(detectedPython)
-        configureTyPython(folder, detectedPython)
-      }
-    } catch (e) {
-      console.warn('detect_venv:', e)
-    }
     venvManager?.clearMemo()
-    mods.invoke('watch_for_venv', { root: folder, recursive: true }).catch(() => {})
 
     // Start LSP
     mods.stores.lspStatus.set('starting')

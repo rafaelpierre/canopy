@@ -5,8 +5,7 @@ const ALLOWED_INVOKE = new Set([
   'list_dir', 'list_python_dir', 'get_python_paths',
   'pty_spawn', 'pty_write', 'pty_resize', 'pty_kill',
   'lsp_start', 'lsp_send', 'lsp_stop', 'lsp_which_binary', 'lsp_install_tool',
-  'check_setup', 'detect_venv', 'detect_venv_recursive', 'find_ancestor_venv', 'check_lsp_available', 'install_ty', 'configure_ty_python',
-  'watch_for_venv',
+  'check_setup', 'find_ancestor_venv', 'check_lsp_available', 'install_ty', 'configure_ty_python',
   'load_prefs', 'save_prefs', 'list_shells',
   'dialog:openFolder', 'dialog:openFile',
   'watch_file', 'unwatch_file',
@@ -18,7 +17,7 @@ const ALLOWED_INVOKE = new Set([
 
 const ALLOWED_LISTEN = new Set([
   'lsp://message', 'lsp://exit', 'pty:data', 'pty:exit', 'menu:action',
-  'file:changed-on-disk', 'venv:created', 'app:before-quit', 'dir:changed',
+  'file:changed-on-disk', 'app:before-quit', 'dir:changed',
   'lsp:watched-files-changed',
 ])
 
