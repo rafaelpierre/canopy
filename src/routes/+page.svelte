@@ -513,6 +513,8 @@
 
       const { stores } = mods
 
+      console.log('[Canopy] build marker: lazy-venv + cache v2 + async get_python_paths')
+
       venvManager = createVenvManager({ invoke: mods.invoke, get: mods.get, stores: {
         projectRoot: stores.projectRoot,
         venvMap:     stores.venvMap,

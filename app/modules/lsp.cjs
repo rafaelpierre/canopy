@@ -26,16 +26,17 @@ function validateLangserverPath(langserverPath) {
 
   const resolved = path.resolve(langserverPath)
 
-  // Allow absolute paths that resolve to a known binary
-  for (const name of KNOWN_LSP_BINARIES) {
-    const bin = findBinary(name)
-    if (bin && resolved === path.resolve(bin)) return resolved
-  }
-
-  // Allow paths under the canopy LSP install directory
+  // FAST PATH: paths under the bundled/local canopy LSP install directory.
+  // Checked first to avoid spawning `which` on the main thread for the common case.
   const lspDir = path.resolve(canopyLspDir())
   if (resolved.startsWith(lspDir + path.sep)) {
     if (fs.existsSync(resolved)) return resolved
+  }
+
+  // Fallback: absolute paths that resolve to a PATH-discovered known binary (e.g. system ty)
+  for (const name of KNOWN_LSP_BINARIES) {
+    const bin = findBinary(name)
+    if (bin && resolved === path.resolve(bin)) return resolved
   }
 
   throw new Error('Langserver path not allowed: ' + langserverPath)
