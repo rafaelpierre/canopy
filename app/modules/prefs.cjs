@@ -3,18 +3,19 @@ const path = require('node:path')
 const os = require('node:os')
 
 function prefsPath() {
-  const configDir = process.platform === 'darwin'
-    ? path.join(os.homedir(), 'Library', 'Application Support')
-    : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+  const configDir =
+    process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support')
+      : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
   return path.join(configDir, 'canopy', 'preferences.json')
 }
 
 let _cachedPrefs = null
 
 const PREF_VALIDATORS = {
-  last_project:      (v) => v === null || typeof v === 'string',
-  preferred_shell:   (v) => v === null || (typeof v === 'string' && path.isAbsolute(v)),
-  project_sessions:  (v) => {
+  last_project: (v) => v === null || typeof v === 'string',
+  preferred_shell: (v) => v === null || (typeof v === 'string' && path.isAbsolute(v)),
+  project_sessions: (v) => {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
     const keys = Object.keys(v)
     if (keys.length > 100) return false
@@ -25,19 +26,23 @@ const PREF_VALIDATORS = {
       const s = /** @type {any} */ (session)
       if (!Array.isArray(s.tabs) || s.tabs.length > 50) return false
       if (!s.tabs.every((t) => typeof t === 'string' && path.isAbsolute(t))) return false
-      if (s.active_file !== null && (typeof s.active_file !== 'string' || !path.isAbsolute(s.active_file))) return false
+      if (
+        s.active_file !== null &&
+        (typeof s.active_file !== 'string' || !path.isAbsolute(s.active_file))
+      )
+        return false
     }
     return true
   },
-  editor_font_size:  (v) => typeof v === 'number' && v >= 8 && v <= 72,
-  tree_font_size:    (v) => typeof v === 'number' && v >= 8 && v <= 72,
-  term_font_size:    (v) => typeof v === 'number' && v >= 8 && v <= 72,
-  active_lsp:        (v) => v === null || typeof v === 'string',
-  python_cmd:        (v) => v === null || (typeof v === 'string' && path.isAbsolute(v)),
-  terminal_height:   (v) => typeof v === 'number' && v >= 50 && v <= 2000,
-  tree_width:        (v) => typeof v === 'number' && v >= 80 && v <= 1000,
-  show_terminal:     (v) => typeof v === 'boolean',
-  show_file_tree:    (v) => typeof v === 'boolean',
+  editor_font_size: (v) => typeof v === 'number' && v >= 8 && v <= 72,
+  tree_font_size: (v) => typeof v === 'number' && v >= 8 && v <= 72,
+  term_font_size: (v) => typeof v === 'number' && v >= 8 && v <= 72,
+  active_lsp: (v) => v === null || typeof v === 'string',
+  python_cmd: (v) => v === null || (typeof v === 'string' && path.isAbsolute(v)),
+  terminal_height: (v) => typeof v === 'number' && v >= 50 && v <= 2000,
+  tree_width: (v) => typeof v === 'number' && v >= 80 && v <= 1000,
+  show_terminal: (v) => typeof v === 'boolean',
+  show_file_tree: (v) => typeof v === 'boolean',
 }
 
 function sanitizePrefs(raw) {
@@ -53,12 +58,16 @@ function getPrefs() {
   if (_cachedPrefs) return _cachedPrefs
   const p = prefsPath()
   if (!fs.existsSync(p)) return {}
-  try { return sanitizePrefs(JSON.parse(fs.readFileSync(p, 'utf-8'))) } catch { return {} }
+  try {
+    return sanitizePrefs(JSON.parse(fs.readFileSync(p, 'utf-8')))
+  } catch {
+    return {}
+  }
 }
 
 function registerPrefsHandlers(ipcMain) {
   ipcMain.handle('load_prefs', () => {
-    _cachedPrefs = null  // invalidate cache
+    _cachedPrefs = null // invalidate cache
     const p = prefsPath()
     if (!fs.existsSync(p)) return {}
     try {
@@ -78,7 +87,7 @@ function registerPrefsHandlers(ipcMain) {
     const dir = path.dirname(p)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     const sanitized = sanitizePrefs(args.prefs)
-    _cachedPrefs = sanitized  // update cache immediately
+    _cachedPrefs = sanitized // update cache immediately
 
     if (pendingWrite) {
       nextPayload = sanitized
@@ -86,15 +95,14 @@ function registerPrefsHandlers(ipcMain) {
     }
 
     const doWrite = (payload) => {
-      pendingWrite = fs.promises.writeFile(p, JSON.stringify(payload, null, 2))
-        .finally(() => {
-          pendingWrite = null
-          if (nextPayload !== null) {
-            const p2 = nextPayload
-            nextPayload = null
-            doWrite(p2)
-          }
-        })
+      pendingWrite = fs.promises.writeFile(p, JSON.stringify(payload, null, 2)).finally(() => {
+        pendingWrite = null
+        if (nextPayload !== null) {
+          const p2 = nextPayload
+          nextPayload = null
+          doWrite(p2)
+        }
+      })
       return pendingWrite
     }
 
@@ -104,13 +112,21 @@ function registerPrefsHandlers(ipcMain) {
   ipcMain.handle('list_shells', async () => {
     if (process.platform === 'win32') {
       const candidates = ['powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe']
-      return candidates.filter(s => {
-        try { require('child_process').execFileSync('where', [s], { stdio: 'ignore' }); return true } catch { return false }
+      return candidates.filter((s) => {
+        try {
+          require('node:child_process').execFileSync('where', [s], { stdio: 'ignore' })
+          return true
+        } catch {
+          return false
+        }
       })
     }
     try {
       const content = await fs.promises.readFile('/etc/shells', 'utf-8')
-      return content.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+      return content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith('#'))
     } catch {
       return [process.env.SHELL || '/bin/bash']
     }

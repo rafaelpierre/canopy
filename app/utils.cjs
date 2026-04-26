@@ -8,9 +8,10 @@ const os = require('node:os')
  * Follows XDG conventions on Linux and the macOS Application Support convention.
  */
 function canopyLspDir() {
-  const dataDir = process.platform === 'darwin'
-    ? path.join(os.homedir(), 'Library', 'Application Support')
-    : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share')
+  const dataDir =
+    process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support')
+      : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share')
   return path.join(dataDir, 'canopy', 'lsp')
 }
 

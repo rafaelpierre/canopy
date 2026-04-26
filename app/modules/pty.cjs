@@ -18,10 +18,12 @@ function registerPtyHandlers(ipcMain, mainWindow) {
     if (id === undefined || id === null) throw new Error('pty_spawn: id is required')
 
     const resolvedCwd = cwd ? path.resolve(cwd) : null
-    const safeCwd = (resolvedCwd && trustedRoot &&
-      (resolvedCwd === trustedRoot || resolvedCwd.startsWith(trustedRoot + path.sep)))
-      ? resolvedCwd
-      : (trustedRoot || os.homedir())
+    const safeCwd =
+      resolvedCwd &&
+      trustedRoot &&
+      (resolvedCwd === trustedRoot || resolvedCwd.startsWith(trustedRoot + path.sep))
+        ? resolvedCwd
+        : trustedRoot || os.homedir()
     const safeCols = Math.max(1, Math.min(cols || 80, 500))
     const safeRows = Math.max(1, Math.min(rows || 24, 500))
 
@@ -41,9 +43,12 @@ function registerPtyHandlers(ipcMain, mainWindow) {
     try {
       const { getPrefs } = require('./prefs.cjs')
       const prefs = getPrefs()
-      if (prefs.preferred_shell && typeof prefs.preferred_shell === 'string' &&
-          require('node:path').isAbsolute(prefs.preferred_shell) &&
-          require('node:fs').existsSync(prefs.preferred_shell)) {
+      if (
+        prefs.preferred_shell &&
+        typeof prefs.preferred_shell === 'string' &&
+        require('node:path').isAbsolute(prefs.preferred_shell) &&
+        require('node:fs').existsSync(prefs.preferred_shell)
+      ) {
         shell = prefs.preferred_shell
       }
     } catch {}
@@ -102,23 +107,59 @@ function registerPtyHandlers(ipcMain, mainWindow) {
     if (typeof id !== 'number' && typeof id !== 'string') throw new Error('pty_resize: invalid id')
     const proc = ptyProcesses.get(id)
     if (!proc) throw new Error(`PTY not running (id=${id})`)
-    proc.resize(
-      Math.max(1, Math.min(cols || 80, 500)),
-      Math.max(1, Math.min(rows || 24, 500))
-    )
+    proc.resize(Math.max(1, Math.min(cols || 80, 500)), Math.max(1, Math.min(rows || 24, 500)))
+  })
+
+  // Return the current working directory of the shell process backing a PTY.
+  // Captures `cd` changes the user has made since spawn — used to persist
+  // terminal-tab cwds in projectSessions for restore-on-reopen.
+  ipcMain.handle('pty_cwd', async (_event, args) => {
+    const proc = ptyProcesses.get(args?.id)
+    if (!proc?.pid) return null
+    try {
+      if (process.platform === 'linux') {
+        return require('node:fs').readlinkSync(`/proc/${proc.pid}/cwd`)
+      }
+      if (process.platform === 'darwin') {
+        const { execFile } = require('node:child_process')
+        const { promisify } = require('node:util')
+        const execFileP = promisify(execFile)
+        // -F n: machine-readable, prefix `n` lines with cwd path
+        const { stdout } = await execFileP('/usr/sbin/lsof', [
+          '-a',
+          '-d',
+          'cwd',
+          '-p',
+          String(proc.pid),
+          '-F',
+          'n',
+        ])
+        for (const line of stdout.split('\n')) if (line.startsWith('n')) return line.slice(1)
+        return null
+      }
+    } catch {
+      return null
+    }
+    return null // windows: not supported yet
   })
 
   ipcMain.handle('pty_kill', (_event, args) => {
     const id = args?.id
     if (id === undefined || id === null || id === 'all') {
       // Kill every active PTY — SIGTERM avoids SIGHUP propagation to sibling process groups on Linux
-      for (const [, proc] of ptyProcesses) { try { proc.kill('SIGTERM') } catch {} }
+      for (const [, proc] of ptyProcesses) {
+        try {
+          proc.kill('SIGTERM')
+        } catch {}
+      }
       ptyProcesses.clear()
       ptyGenerations.clear()
     } else {
       const proc = ptyProcesses.get(id)
       if (proc) {
-        try { proc.kill('SIGTERM') } catch {}
+        try {
+          proc.kill('SIGTERM')
+        } catch {}
         ptyProcesses.delete(id)
         ptyGenerations.delete(id)
       }
@@ -128,7 +169,9 @@ function registerPtyHandlers(ipcMain, mainWindow) {
 
 function killAllPtys() {
   for (const [, proc] of ptyProcesses) {
-    try { proc.kill() } catch (_) {}
+    try {
+      proc.kill()
+    } catch (_) {}
   }
   ptyProcesses.clear()
 }

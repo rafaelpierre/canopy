@@ -1,9 +1,12 @@
 /** Open all .py files in the LSP so it reports project-wide diagnostics. */
-export async function scanWorkspace(root: string, deps: {
-  invoke: (cmd: string, args?: any) => Promise<any>
-  lspClient: any
-  stores: any
-}): Promise<void> {
+export async function scanWorkspace(
+  root: string,
+  deps: {
+    invoke: (cmd: string, args?: any) => Promise<any>
+    lspClient: any
+    stores: any
+  },
+): Promise<void> {
   const { invoke, lspClient, stores } = deps
   let paths: string[]
   try {
@@ -26,7 +29,9 @@ export async function scanWorkspace(root: string, deps: {
       try {
         const content = await invoke('read_file_content', { path: p })
         if (lspClient.isReady()) lspClient.didOpen(p, content)
-      } catch { /* skip unreadable */ }
+      } catch {
+        /* skip unreadable */
+      }
     }
   }
 

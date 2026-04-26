@@ -10,8 +10,14 @@ function installedLangserverJS() {
   const libDir = path.join(lspDir, 'lib')
   if (!fs.existsSync(libDir)) return null
   try {
-    for (const pyDir of fs.readdirSync(libDir).filter(d => d.startsWith('python'))) {
-      const jsEntry = path.join(libDir, pyDir, 'site-packages', 'basedpyright', 'langserver.index.js')
+    for (const pyDir of fs.readdirSync(libDir).filter((d) => d.startsWith('python'))) {
+      const jsEntry = path.join(
+        libDir,
+        pyDir,
+        'site-packages',
+        'basedpyright',
+        'langserver.index.js',
+      )
       if (fs.existsSync(jsEntry)) return jsEntry
     }
   } catch (_) {}
@@ -30,7 +36,7 @@ function findLangserver() {
 
 function hasWheels(dir) {
   if (!fs.existsSync(dir)) return false
-  return fs.readdirSync(dir).some(f => f.endsWith('.whl'))
+  return fs.readdirSync(dir).some((f) => f.endsWith('.whl'))
 }
 
 function bundledWheelsDir() {
@@ -50,14 +56,25 @@ function installFromWheels(python, wheelsDir) {
   fs.mkdirSync(target, { recursive: true })
 
   try {
-    execFileSync(python, [
-      '-m', 'pip', 'install',
-      '--no-index', '--find-links', wheelsDir,
-      '--prefix', target,
-      '--no-deps',
-      '--no-warn-script-location', '--no-cache-dir', '--quiet',
-      'basedpyright',
-    ], { encoding: 'utf-8' })
+    execFileSync(
+      python,
+      [
+        '-m',
+        'pip',
+        'install',
+        '--no-index',
+        '--find-links',
+        wheelsDir,
+        '--prefix',
+        target,
+        '--no-deps',
+        '--no-warn-script-location',
+        '--no-cache-dir',
+        '--quiet',
+        'basedpyright',
+      ],
+      { encoding: 'utf-8' },
+    )
   } catch (e) {
     throw new Error('pip install failed: ' + e.message)
   }
@@ -67,7 +84,6 @@ function installFromWheels(python, wheelsDir) {
 
   throw new Error('pip install succeeded but langserver.index.js not found in ' + target)
 }
-
 
 function findTy() {
   return findBinary('ty')
@@ -100,7 +116,9 @@ function getPythonVersionFromVenv(venvRoot) {
     const content = fs.readFileSync(cfg, 'utf-8')
     const m = content.match(/^version_info\s*=\s*(\d+\.\d+)/m)
     return m ? m[1] : null
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 function hasTyPythonConfig(content) {
@@ -119,20 +137,40 @@ function registerSetupHandlers(ipcMain) {
     }
 
     if (!python) {
-      return { basedpyright_path: langserver, python_path: null, ready: false, message: 'Python not found in PATH' }
+      return {
+        basedpyright_path: langserver,
+        python_path: null,
+        ready: false,
+        message: 'Python not found in PATH',
+      }
     }
 
     const wheelsDir = bundledWheelsDir()
     if (wheelsDir) {
       try {
         const installed = installFromWheels(python, wheelsDir)
-        return { basedpyright_path: installed, python_path: python, ready: true, message: 'Installed basedpyright from bundled wheels' }
+        return {
+          basedpyright_path: installed,
+          python_path: python,
+          ready: true,
+          message: 'Installed basedpyright from bundled wheels',
+        }
       } catch (e) {
-        return { basedpyright_path: null, python_path: python, ready: false, message: 'Auto-install failed: ' + e.message }
+        return {
+          basedpyright_path: null,
+          python_path: python,
+          ready: false,
+          message: 'Auto-install failed: ' + e.message,
+        }
       }
     }
 
-    return { basedpyright_path: null, python_path: python, ready: false, message: 'basedpyright not found. Run: pip install basedpyright' }
+    return {
+      basedpyright_path: null,
+      python_path: python,
+      ready: false,
+      message: 'basedpyright not found. Run: pip install basedpyright',
+    }
   })
 
   ipcMain.handle('check_lsp_available', (_event, args) => {
@@ -147,12 +185,18 @@ function registerSetupHandlers(ipcMain) {
       const python = findPython()
       const uvPath = await ensureUv(python)
       if (!uvPath) {
-        return { success: false, message: 'Could not find or install uv. Install it manually: pip install uv' }
+        return {
+          success: false,
+          message: 'Could not find or install uv. Install it manually: pip install uv',
+        }
       }
       execFileSync(uvPath, ['tool', 'install', 'ty'], { encoding: 'utf-8' })
       const tyPath = findTy()
       if (tyPath) return { success: true, message: 'Installed ty successfully', path: tyPath }
-      return { success: false, message: 'Installation appeared successful but ty not found in PATH' }
+      return {
+        success: false,
+        message: 'Installation appeared successful but ty not found in PATH',
+      }
     } catch (e) {
       return { success: false, message: 'Failed to install ty: ' + e.message }
     }
@@ -165,7 +209,8 @@ function registerSetupHandlers(ipcMain) {
     const { getProjectRoot } = require('./fs.cjs')
     const trustedRoot = getProjectRoot()
     const resolved = path.resolve(root)
-    if (trustedRoot && resolved !== trustedRoot && !resolved.startsWith(trustedRoot + path.sep)) return []
+    if (trustedRoot && resolved !== trustedRoot && !resolved.startsWith(trustedRoot + path.sep))
+      return []
     const { VENV_NAMES, IGNORED_DIRS } = require('../constants.cjs')
 
     const venvNameSet = new Set(VENV_NAMES)
@@ -173,17 +218,32 @@ function registerSetupHandlers(ipcMain) {
     const seen = new Set()
 
     async function fileAccessible(p) {
-      try { await fs.promises.access(p, fs.constants.X_OK); return true } catch { return false }
+      try {
+        await fs.promises.access(p, fs.constants.X_OK)
+        return true
+      } catch {
+        return false
+      }
     }
 
     async function walk(dir, depth) {
       if (depth > maxDepth) return
       let entries
-      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
       // Python Envy–style heuristic: a directory without any Python project marker
       // is very unlikely to own a .venv. Skip the subtree when neither a marker
       // nor a venv directory is directly visible.
-      const PROJECT_MARKERS = new Set(['pyproject.toml', 'Pipfile', 'setup.py', 'requirements.txt', 'manage.py'])
+      const PROJECT_MARKERS = new Set([
+        'pyproject.toml',
+        'Pipfile',
+        'setup.py',
+        'requirements.txt',
+        'manage.py',
+      ])
       let hasMarker = false
       let hasVenvHere = false
       for (const entry of entries) {
@@ -199,21 +259,26 @@ function registerSetupHandlers(ipcMain) {
         if (venvNameSet.has(name)) {
           if (seen.has(fullPath)) continue
           seen.add(fullPath)
-          tasks.push((async () => {
-            let pythonPath = null
-            for (const bin of ['python3', 'python']) {
-              const candidate = path.join(fullPath, 'bin', bin)
-              if (await fileAccessible(candidate)) { pythonPath = candidate; break }
-            }
-            if (!pythonPath) {
-              const winCandidate = path.join(fullPath, 'Scripts', 'python.exe')
-              if (await fileAccessible(winCandidate)) pythonPath = winCandidate
-            }
-            if (pythonPath) {
-              const isUv = await fileAccessible(path.join(dir, 'uv.lock'))
-              results.push({ subdir: dir, pythonPath, venvPath: fullPath, isUv })
-            }
-          })())
+          tasks.push(
+            (async () => {
+              let pythonPath = null
+              for (const bin of ['python3', 'python']) {
+                const candidate = path.join(fullPath, 'bin', bin)
+                if (await fileAccessible(candidate)) {
+                  pythonPath = candidate
+                  break
+                }
+              }
+              if (!pythonPath) {
+                const winCandidate = path.join(fullPath, 'Scripts', 'python.exe')
+                if (await fileAccessible(winCandidate)) pythonPath = winCandidate
+              }
+              if (pythonPath) {
+                const isUv = await fileAccessible(path.join(dir, 'uv.lock'))
+                results.push({ subdir: dir, pythonPath, venvPath: fullPath, isUv })
+              }
+            })(),
+          )
           continue
         }
         if (IGNORED_DIRS.has(name)) continue
@@ -234,6 +299,7 @@ function registerSetupHandlers(ipcMain) {
   ipcMain.handle('find_ancestor_venv', async (_event, args) => {
     const filePath = args?.filePath
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null
+    const { getProjectRoot } = require('./fs.cjs')
     const trustedRoot = getProjectRoot()
     if (!trustedRoot) return null
     const resolved = path.resolve(filePath)
@@ -250,7 +316,10 @@ function registerSetupHandlers(ipcMain) {
           try {
             await fs.promises.access(pyBin, fs.constants.X_OK)
             let isUv = false
-            try { await fs.promises.access(path.join(dir, 'uv.lock')); isUv = true } catch {}
+            try {
+              await fs.promises.access(path.join(dir, 'uv.lock'))
+              isUv = true
+            } catch {}
             return { subdir: dir, pythonPath: pyBin, venvPath, isUv }
           } catch {}
         }
@@ -297,13 +366,17 @@ function registerSetupHandlers(ipcMain) {
 
     const binIdx = pythonPath.lastIndexOf('/bin/')
     const scriptIdx = pythonPath.lastIndexOf(path.sep + 'Scripts' + path.sep)
-    const venvRoot = binIdx !== -1 ? pythonPath.slice(0, binIdx)
-                   : scriptIdx !== -1 ? pythonPath.slice(0, scriptIdx)
-                   : null
+    const venvRoot =
+      binIdx !== -1
+        ? pythonPath.slice(0, binIdx)
+        : scriptIdx !== -1
+          ? pythonPath.slice(0, scriptIdx)
+          : null
     if (!venvRoot) return { configured: false, reason: 'pythonPath not in a venv' }
 
     const version = getPythonVersionFromVenv(venvRoot)
-    if (!version) return { configured: false, reason: 'could not read python version from pyvenv.cfg' }
+    if (!version)
+      return { configured: false, reason: 'could not read python version from pyvenv.cfg' }
 
     // SEC-2: validate version string before interpolating into TOML
     if (!/^\d+\.\d+(\.\d+)?$/.test(version)) {

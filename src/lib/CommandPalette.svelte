@@ -1,390 +1,453 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import { basename, relpath } from './path'
+import { onMount } from 'svelte'
+import { basename, relpath } from './path'
 
-  // --- Props ---
-  interface Props {
-    open: boolean
-    mode: 'file' | 'command'
-    allFiles: string[]
-    projectRoot: string | null
-    onClose: () => void
-    onOpenFile: (path: string, line?: number) => void
-    onFindInFile: (query: string) => void
-    onRevealLine: (line: number) => void
-    onGetCurrentFileContent: () => { path: string; content: string } | null
-    onToggleTerminal: () => void
-    onToggleTree: () => void
+// --- Props ---
+interface Props {
+  open: boolean
+  mode: 'file' | 'command'
+  allFiles: string[]
+  projectRoot: string | null
+  onClose: () => void
+  onOpenFile: (path: string, line?: number) => void
+  onFindInFile: (query: string) => void
+  onRevealLine: (line: number) => void
+  onGetCurrentFileContent: () => { path: string; content: string } | null
+  onToggleTerminal: () => void
+  onToggleTree: () => void
+}
+let {
+  open,
+  mode,
+  allFiles,
+  projectRoot,
+  onClose,
+  onOpenFile,
+  onFindInFile,
+  onRevealLine,
+  onGetCurrentFileContent,
+  onToggleTerminal,
+  onToggleTree,
+}: Props = $props()
+
+// --- Lazy IPC ---
+let invoke: any = null
+onMount(async () => {
+  const ipc = await import('$lib/ipc')
+  invoke = ipc.invoke
+})
+
+// --- Command definitions ---
+interface SlashCommand {
+  name: string
+  label: string
+  description: string
+  hasParams: boolean
+  paramHint?: string
+}
+
+const commands: SlashCommand[] = [
+  {
+    name: 'find',
+    label: '/find',
+    description: 'Find text in current file',
+    hasParams: true,
+    paramHint: 'search query…',
+  },
+  {
+    name: 'findAll',
+    label: '/findAll',
+    description: 'Find text across all project files',
+    hasParams: true,
+    paramHint: 'query [--glob *.py]',
+  },
+  {
+    name: 'open',
+    label: '/open',
+    description: 'Quick open file by name',
+    hasParams: true,
+    paramHint: 'filename…',
+  },
+  { name: 'term', label: '/term', description: 'Toggle terminal panel', hasParams: false },
+  { name: 'tree', label: '/tree', description: 'Toggle file tree panel', hasParams: false },
+]
+
+// --- State ---
+let inputEl: HTMLInputElement | undefined = $state(undefined)
+let previousFocus: HTMLElement | null = null
+let query = $state('')
+let selectedIndex = $state(0)
+let activeCommand: SlashCommand | null = $state(null)
+let paramQuery = $state('')
+let showSlashOverlay = $state(false)
+
+// Filtered slash commands
+let filteredCommands = $derived.by(() => {
+  if (!showSlashOverlay || activeCommand) return []
+  const q = query.slice(1).toLowerCase()
+  return commands.filter((c) => c.name.toLowerCase().startsWith(q))
+})
+
+// File search results (for default mode or /open command)
+let fileResults = $derived.by(() => {
+  const isFileMode = mode === 'file' && !showSlashOverlay && !activeCommand
+  const isOpenCmd = activeCommand?.name === 'open'
+  if (!isFileMode && !isOpenCmd) return []
+
+  const searchStr = isOpenCmd ? paramQuery : query
+  if (!searchStr.trim()) return allFiles.slice(0, 20)
+  const l = searchStr.toLowerCase()
+  return allFiles.filter((p) => p.toLowerCase().includes(l)).slice(0, 20)
+})
+
+// Search results for /findAll
+interface GrepResult {
+  path: string
+  line: number
+  text: string
+}
+let grepResults: GrepResult[] = $state([])
+let grepGeneration = 0 // stale-result guard: only apply results from the latest search
+let grepLoading = $state(false)
+
+// Search results for /find (current file)
+interface FileHit {
+  line: number
+  text: string
+}
+let fileHits: FileHit[] = $state([])
+
+// Which list is currently showing
+let visibleList = $derived.by(() => {
+  if (filteredCommands.length > 0) return 'commands' as const
+  if (activeCommand?.name === 'findAll') return 'grep' as const
+  if (activeCommand?.name === 'find') return 'filehits' as const
+  if (fileResults.length > 0) return 'files' as const
+  return 'empty' as const
+})
+
+// The raw search query for highlighting (works for both /find and /findAll)
+let highlightQuery = $derived.by(() => {
+  if (activeCommand?.name === 'find') return paramQuery.trim()
+  if (activeCommand?.name === 'findAll') {
+    let q = paramQuery
+    const globMatch = q.match(/--glob\s+\S+/)
+    if (globMatch) q = q.replace(/--glob\s+\S+/, '').trim()
+    return q.trim()
   }
-  let {
-    open, mode, allFiles, projectRoot,
-    onClose, onOpenFile, onFindInFile, onRevealLine, onGetCurrentFileContent,
-    onToggleTerminal, onToggleTree,
-  }: Props = $props()
+  return ''
+})
 
-  // --- Lazy IPC ---
-  let invoke: any = null
-  onMount(async () => {
-    const ipc = await import('$lib/ipc')
-    invoke = ipc.invoke
-  })
+let listLength = $derived.by(() => {
+  if (visibleList === 'commands') return filteredCommands.length
+  if (visibleList === 'files') return fileResults.length
+  if (visibleList === 'grep') return grepResults.length
+  if (visibleList === 'filehits') return fileHits.length
+  return 0
+})
 
-  // --- Command definitions ---
-  interface SlashCommand {
-    name: string
-    label: string
-    description: string
-    hasParams: boolean
-    paramHint?: string
-  }
-
-  const commands: SlashCommand[] = [
-    { name: 'find',    label: '/find',    description: 'Find text in current file',         hasParams: true, paramHint: 'search query…' },
-    { name: 'findAll', label: '/findAll', description: 'Find text across all project files', hasParams: true, paramHint: 'query [--glob *.py]' },
-    { name: 'open',    label: '/open',    description: 'Quick open file by name',            hasParams: true, paramHint: 'filename…' },
-    { name: 'term',    label: '/term',    description: 'Toggle terminal panel',              hasParams: false },
-    { name: 'tree',    label: '/tree',    description: 'Toggle file tree panel',             hasParams: false },
-  ]
-
-  // --- State ---
-  let inputEl: HTMLInputElement | undefined = $state(undefined)
-  let previousFocus: HTMLElement | null = null
-  let query = $state('')
-  let selectedIndex = $state(0)
-  let activeCommand: SlashCommand | null = $state(null)
-  let paramQuery = $state('')
-  let showSlashOverlay = $state(false)
-
-  // Filtered slash commands
-  let filteredCommands = $derived.by(() => {
-    if (!showSlashOverlay || activeCommand) return []
-    const q = query.slice(1).toLowerCase()
-    return commands.filter(c => c.name.toLowerCase().startsWith(q))
-  })
-
-  // File search results (for default mode or /open command)
-  let fileResults = $derived.by(() => {
-    const isFileMode = (mode === 'file' && !showSlashOverlay && !activeCommand)
-    const isOpenCmd  = activeCommand?.name === 'open'
-    if (!isFileMode && !isOpenCmd) return []
-
-    const searchStr = isOpenCmd ? paramQuery : query
-    if (!searchStr.trim()) return allFiles.slice(0, 20)
-    const l = searchStr.toLowerCase()
-    return allFiles.filter(p => p.toLowerCase().includes(l)).slice(0, 20)
-  })
-
-  // Search results for /findAll
-  interface GrepResult { path: string; line: number; text: string }
-  let grepResults: GrepResult[] = $state([])
-  let grepGeneration = 0  // stale-result guard: only apply results from the latest search
-  let grepLoading = $state(false)
-
-  // Search results for /find (current file)
-  interface FileHit { line: number; text: string }
-  let fileHits: FileHit[] = $state([])
-
-  // Which list is currently showing
-  let visibleList = $derived.by(() => {
-    if (filteredCommands.length > 0) return 'commands' as const
-    if (activeCommand?.name === 'findAll') return 'grep' as const
-    if (activeCommand?.name === 'find') return 'filehits' as const
-    if (fileResults.length > 0) return 'files' as const
-    return 'empty' as const
-  })
-
-  // The raw search query for highlighting (works for both /find and /findAll)
-  let highlightQuery = $derived.by(() => {
-    if (activeCommand?.name === 'find') return paramQuery.trim()
-    if (activeCommand?.name === 'findAll') {
-      let q = paramQuery
-      const globMatch = q.match(/--glob\s+\S+/)
-      if (globMatch) q = q.replace(/--glob\s+\S+/, '').trim()
-      return q.trim()
-    }
-    return ''
-  })
-
-  let listLength = $derived.by(() => {
-    if (visibleList === 'commands') return filteredCommands.length
-    if (visibleList === 'files') return fileResults.length
-    if (visibleList === 'grep') return grepResults.length
-    if (visibleList === 'filehits') return fileHits.length
-    return 0
-  })
-
-  // --- Reactivity: reset state when palette opens/closes ---
-  $effect(() => {
-    if (open) {
-      previousFocus = document.activeElement as HTMLElement | null
-      query = ''
-      paramQuery = ''
-      activeCommand = null
-      selectedIndex = 0
-      showSlashOverlay = mode === 'command'
-      grepResults = []
-      grepLoading = false
-      fileHits = []
-      if (mode === 'command') query = '/'
-      requestAnimationFrame(() => {
-        inputEl?.focus()
-        if (mode === 'command' && inputEl) {
-          inputEl.setSelectionRange(1, 1)
-        }
-      })
-    } else {
-      previousFocus?.focus()
-      previousFocus = null
-      _findCache = null
-    }
-  })
-
-  // --- Handlers ---
-
-  function onInput(e: Event) {
-    const val = (e.target as HTMLInputElement).value
-
-    if (activeCommand) {
-      paramQuery = val
-      selectedIndex = 0
-      if (activeCommand.name === 'findAll') debouncedGrep(val)
-      if (activeCommand.name === 'find') searchCurrentFile(val)
-      return
-    }
-
-    query = val
-    selectedIndex = 0
-
-    // Toggle slash overlay
-    if (val.startsWith('/')) {
-      showSlashOverlay = true
-    } else {
-      showSlashOverlay = false
-    }
-  }
-
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      if (activeCommand) {
-        // Go back to command input
-        activeCommand = null
-        paramQuery = ''
-        query = '/'
-        showSlashOverlay = true
-        selectedIndex = 0
-        requestAnimationFrame(() => inputEl?.focus())
-        e.preventDefault()
-        return
-      }
-      onClose()
-      return
-    }
-
-    if (e.key === 'ArrowDown') {
-      selectedIndex = Math.min(selectedIndex + 1, listLength - 1)
-      e.preventDefault()
-      return
-    }
-    if (e.key === 'ArrowUp') {
-      selectedIndex = Math.max(selectedIndex - 1, 0)
-      e.preventDefault()
-      return
-    }
-
-    if (e.key === 'Tab' && visibleList === 'commands' && filteredCommands.length > 0) {
-      // Tab-complete the selected command
-      const cmd = filteredCommands[selectedIndex]
-      selectCommand(cmd)
-      e.preventDefault()
-      return
-    }
-
-    if (e.key === 'Enter') {
-      executeSelection()
-      e.preventDefault()
-      return
-    }
-
-    // Space after a fully typed command triggers pill
-    if (e.key === ' ' && !activeCommand && showSlashOverlay) {
-      const typed = query.slice(1).toLowerCase()
-      const exact = commands.find(c => c.name.toLowerCase() === typed)
-      if (exact) {
-        selectCommand(exact)
-        e.preventDefault()
-        return
-      }
-    }
-  }
-
-  function selectCommand(cmd: SlashCommand) {
-    if (!cmd.hasParams) {
-      // Execute immediately
-      executeCommand(cmd, '')
-      return
-    }
-    activeCommand = cmd
+// --- Reactivity: reset state when palette opens/closes ---
+$effect(() => {
+  if (open) {
+    previousFocus = document.activeElement as HTMLElement | null
+    query = ''
     paramQuery = ''
+    activeCommand = null
     selectedIndex = 0
+    showSlashOverlay = mode === 'command'
     grepResults = []
-    requestAnimationFrame(() => inputEl?.focus())
-  }
-
-  function executeSelection() {
-    if (visibleList === 'commands' && filteredCommands.length > 0) {
-      selectCommand(filteredCommands[selectedIndex])
-      return
-    }
-
-    if (visibleList === 'files' && fileResults.length > 0) {
-      const file = fileResults[selectedIndex]
-      if (file) { onOpenFile(file); onClose() }
-      return
-    }
-
-    if (visibleList === 'grep' && grepResults.length > 0) {
-      const result = grepResults[selectedIndex]
-      if (result) {
-        onOpenFile(result.path, result.line)
-        onClose()
-      }
-      return
-    }
-
-    if (visibleList === 'filehits' && fileHits.length > 0) {
-      const hit = fileHits[selectedIndex]
-      if (hit) {
-        onRevealLine(hit.line)
-        onClose()
-      }
-      return
-    }
-
-    // Execute active command with current param
-    if (activeCommand) {
-      executeCommand(activeCommand, paramQuery)
-      return
-    }
-  }
-
-  function executeCommand(cmd: SlashCommand, params: string) {
-    switch (cmd.name) {
-      case 'find':
-        // If there are hits, jump to the first one
-        if (fileHits.length > 0) {
-          onRevealLine(fileHits[0].line)
-          onClose()
-        }
-        break
-      case 'findAll':
-        if (params.trim()) doGrep(params)
-        break
-      case 'open':
-        // File results are already showing, just pick the first
-        if (fileResults.length > 0) {
-          onOpenFile(fileResults[0])
-          onClose()
-        }
-        break
-      case 'term':
-        onToggleTerminal()
-        onClose()
-        break
-      case 'tree':
-        onToggleTree()
-        onClose()
-        break
-    }
-  }
-
-  // --- Grep ---
-
-  let grepTimer: ReturnType<typeof setTimeout> | null = null
-  function debouncedGrep(q: string) {
-    if (grepTimer) clearTimeout(grepTimer)
-    if (!q.trim()) { grepResults = []; grepLoading = false; return }
-    grepLoading = true
-    grepTimer = setTimeout(() => doGrep(q), 250)
-  }
-
-  async function doGrep(raw: string) {
-    if (!invoke || !projectRoot) return
-    const gen = ++grepGeneration
-    grepLoading = true
-
-    // Parse --glob flag
-    let query = raw
-    let glob = ''
-    const globMatch = raw.match(/--glob\s+(\S+)/)
-    if (globMatch) {
-      glob = globMatch[1]
-      query = raw.replace(/--glob\s+\S+/, '').trim()
-    }
-
-    if (!query) { grepResults = []; grepLoading = false; return }
-
-    try {
-      const results = await invoke('grep_files', {
-        root: projectRoot,
-        query,
-        glob: glob || undefined,
-      })
-      if (gen !== grepGeneration) return  // stale: a newer search has started
-      grepResults = (results ?? []).slice(0, 200)
-    } catch (e) {
-      if (gen !== grepGeneration) return
-      console.error('grep_files failed:', e)
-      grepResults = []
-    }
     grepLoading = false
-  }
-
-  // --- In-file search ---
-
-  let _findCache: { path: string; lines: string[] } | null = null
-
-  function searchCurrentFile(q: string) {
-    if (!q.trim()) { fileHits = []; return }
-    const file = onGetCurrentFileContent()
-    if (!file) { fileHits = []; return }
-    if (!_findCache || _findCache.path !== file.path) {
-      _findCache = { path: file.path, lines: file.content.split('\n') }
-    }
-    const lower = q.toLowerCase()
-    const lines = _findCache.lines
-    const hits: FileHit[] = []
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().includes(lower)) {
-        hits.push({ line: i + 1, text: lines[i] })
-        if (hits.length >= 100) break
+    fileHits = []
+    if (mode === 'command') query = '/'
+    requestAnimationFrame(() => {
+      inputEl?.focus()
+      if (mode === 'command' && inputEl) {
+        inputEl.setSelectionRange(1, 1)
       }
-    }
-    fileHits = hits
+    })
+  } else {
+    previousFocus?.focus()
+    previousFocus = null
+    _findCache = null
+  }
+})
+
+// --- Handlers ---
+
+function onInput(e: Event) {
+  const val = (e.target as HTMLInputElement).value
+
+  if (activeCommand) {
+    paramQuery = val
+    selectedIndex = 0
+    if (activeCommand.name === 'findAll') debouncedGrep(val)
+    if (activeCommand.name === 'find') searchCurrentFile(val)
+    return
   }
 
-  // --- Helpers ---
+  query = val
+  selectedIndex = 0
 
-  /** Split a line of text into segments: [before, match, after] for highlight rendering */
-  function highlightSegments(text: string, query: string): { before: string; match: string; after: string } {
-    if (!query) return { before: text, match: '', after: '' }
-    const idx = text.toLowerCase().indexOf(query.toLowerCase())
-    if (idx === -1) return { before: text, match: '', after: '' }
-    return {
-      before: text.slice(0, idx),
-      match:  text.slice(idx, idx + query.length),
-      after:  text.slice(idx + query.length),
-    }
+  // Toggle slash overlay
+  if (val.startsWith('/')) {
+    showSlashOverlay = true
+  } else {
+    showSlashOverlay = false
   }
+}
 
-  function clickFile(p: string) { onOpenFile(p); onClose() }
-  function clickGrepResult(r: GrepResult) {
-    onOpenFile(r.path, r.line)
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (activeCommand) {
+      // Go back to command input
+      activeCommand = null
+      paramQuery = ''
+      query = '/'
+      showSlashOverlay = true
+      selectedIndex = 0
+      requestAnimationFrame(() => inputEl?.focus())
+      e.preventDefault()
+      return
+    }
     onClose()
+    return
   }
-  function clickFileHit(h: FileHit) { onRevealLine(h.line); onClose() }
-  function clickCommand(cmd: SlashCommand) { selectCommand(cmd) }
 
-  function handleBgClick() { onClose() }
+  if (e.key === 'ArrowDown') {
+    selectedIndex = Math.min(selectedIndex + 1, listLength - 1)
+    e.preventDefault()
+    return
+  }
+  if (e.key === 'ArrowUp') {
+    selectedIndex = Math.max(selectedIndex - 1, 0)
+    e.preventDefault()
+    return
+  }
+
+  if (e.key === 'Tab' && visibleList === 'commands' && filteredCommands.length > 0) {
+    // Tab-complete the selected command
+    const cmd = filteredCommands[selectedIndex]
+    selectCommand(cmd)
+    e.preventDefault()
+    return
+  }
+
+  if (e.key === 'Enter') {
+    executeSelection()
+    e.preventDefault()
+    return
+  }
+
+  // Space after a fully typed command triggers pill
+  if (e.key === ' ' && !activeCommand && showSlashOverlay) {
+    const typed = query.slice(1).toLowerCase()
+    const exact = commands.find((c) => c.name.toLowerCase() === typed)
+    if (exact) {
+      selectCommand(exact)
+      e.preventDefault()
+      return
+    }
+  }
+}
+
+function selectCommand(cmd: SlashCommand) {
+  if (!cmd.hasParams) {
+    // Execute immediately
+    executeCommand(cmd, '')
+    return
+  }
+  activeCommand = cmd
+  paramQuery = ''
+  selectedIndex = 0
+  grepResults = []
+  requestAnimationFrame(() => inputEl?.focus())
+}
+
+function executeSelection() {
+  if (visibleList === 'commands' && filteredCommands.length > 0) {
+    selectCommand(filteredCommands[selectedIndex])
+    return
+  }
+
+  if (visibleList === 'files' && fileResults.length > 0) {
+    const file = fileResults[selectedIndex]
+    if (file) {
+      onOpenFile(file)
+      onClose()
+    }
+    return
+  }
+
+  if (visibleList === 'grep' && grepResults.length > 0) {
+    const result = grepResults[selectedIndex]
+    if (result) {
+      onOpenFile(result.path, result.line)
+      onClose()
+    }
+    return
+  }
+
+  if (visibleList === 'filehits' && fileHits.length > 0) {
+    const hit = fileHits[selectedIndex]
+    if (hit) {
+      onRevealLine(hit.line)
+      onClose()
+    }
+    return
+  }
+
+  // Execute active command with current param
+  if (activeCommand) {
+    executeCommand(activeCommand, paramQuery)
+    return
+  }
+}
+
+function executeCommand(cmd: SlashCommand, params: string) {
+  switch (cmd.name) {
+    case 'find':
+      // If there are hits, jump to the first one
+      if (fileHits.length > 0) {
+        onRevealLine(fileHits[0].line)
+        onClose()
+      }
+      break
+    case 'findAll':
+      if (params.trim()) doGrep(params)
+      break
+    case 'open':
+      // File results are already showing, just pick the first
+      if (fileResults.length > 0) {
+        onOpenFile(fileResults[0])
+        onClose()
+      }
+      break
+    case 'term':
+      onToggleTerminal()
+      onClose()
+      break
+    case 'tree':
+      onToggleTree()
+      onClose()
+      break
+  }
+}
+
+// --- Grep ---
+
+let grepTimer: ReturnType<typeof setTimeout> | null = null
+function debouncedGrep(q: string) {
+  if (grepTimer) clearTimeout(grepTimer)
+  if (!q.trim()) {
+    grepResults = []
+    grepLoading = false
+    return
+  }
+  grepLoading = true
+  grepTimer = setTimeout(() => doGrep(q), 250)
+}
+
+async function doGrep(raw: string) {
+  if (!invoke || !projectRoot) return
+  const gen = ++grepGeneration
+  grepLoading = true
+
+  // Parse --glob flag
+  let query = raw
+  let glob = ''
+  const globMatch = raw.match(/--glob\s+(\S+)/)
+  if (globMatch) {
+    glob = globMatch[1]
+    query = raw.replace(/--glob\s+\S+/, '').trim()
+  }
+
+  if (!query) {
+    grepResults = []
+    grepLoading = false
+    return
+  }
+
+  try {
+    const results = await invoke('grep_files', {
+      root: projectRoot,
+      query,
+      glob: glob || undefined,
+    })
+    if (gen !== grepGeneration) return // stale: a newer search has started
+    grepResults = (results ?? []).slice(0, 200)
+  } catch (e) {
+    if (gen !== grepGeneration) return
+    console.error('grep_files failed:', e)
+    grepResults = []
+  }
+  grepLoading = false
+}
+
+// --- In-file search ---
+
+let _findCache: { path: string; lines: string[] } | null = null
+
+function searchCurrentFile(q: string) {
+  if (!q.trim()) {
+    fileHits = []
+    return
+  }
+  const file = onGetCurrentFileContent()
+  if (!file) {
+    fileHits = []
+    return
+  }
+  if (!_findCache || _findCache.path !== file.path) {
+    _findCache = { path: file.path, lines: file.content.split('\n') }
+  }
+  const lower = q.toLowerCase()
+  const lines = _findCache.lines
+  const hits: FileHit[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].toLowerCase().includes(lower)) {
+      hits.push({ line: i + 1, text: lines[i] })
+      if (hits.length >= 100) break
+    }
+  }
+  fileHits = hits
+}
+
+// --- Helpers ---
+
+/** Split a line of text into segments: [before, match, after] for highlight rendering */
+function highlightSegments(
+  text: string,
+  query: string,
+): { before: string; match: string; after: string } {
+  if (!query) return { before: text, match: '', after: '' }
+  const idx = text.toLowerCase().indexOf(query.toLowerCase())
+  if (idx === -1) return { before: text, match: '', after: '' }
+  return {
+    before: text.slice(0, idx),
+    match: text.slice(idx, idx + query.length),
+    after: text.slice(idx + query.length),
+  }
+}
+
+function clickFile(p: string) {
+  onOpenFile(p)
+  onClose()
+}
+function clickGrepResult(r: GrepResult) {
+  onOpenFile(r.path, r.line)
+  onClose()
+}
+function clickFileHit(h: FileHit) {
+  onRevealLine(h.line)
+  onClose()
+}
+function clickCommand(cmd: SlashCommand) {
+  selectCommand(cmd)
+}
+
+function handleBgClick() {
+  onClose()
+}
 </script>
 
 {#if open}

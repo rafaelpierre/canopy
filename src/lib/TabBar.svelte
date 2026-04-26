@@ -1,34 +1,34 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import { basename } from '$lib/path'
-  import { fileIcon, fileColor } from '$lib/file-icons'
+import { tick } from 'svelte'
+import { fileColor, fileIcon } from '$lib/file-icons'
+import { basename } from '$lib/path'
 
-  interface Props {
-    tabs: string[]
-    activeTab: string | null
-    dirtyTabs: Set<string>
-    onTabClick: (path: string) => void
-    onTabClose: (path: string, e: MouseEvent) => void
-    onTabContextMenu: (e: MouseEvent, tab: string) => void
-  }
+interface Props {
+  tabs: string[]
+  activeTab: string | null
+  dirtyTabs: Set<string>
+  onTabClick: (path: string) => void
+  onTabClose: (path: string, e: MouseEvent) => void
+  onTabContextMenu: (e: MouseEvent, tab: string) => void
+}
 
-  let { tabs, activeTab, dirtyTabs, onTabClick, onTabClose, onTabContextMenu }: Props = $props()
+let { tabs, activeTab, dirtyTabs, onTabClick, onTabClose, onTabContextMenu }: Props = $props()
 
-  const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
+const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
 
-  function onTabBarKeydown(e: KeyboardEvent) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-    const idx = tabs.indexOf(activeTab ?? '')
-    if (idx === -1) return
-    e.preventDefault()
-    const nextIdx = e.key === 'ArrowRight'
-      ? Math.min(idx + 1, tabs.length - 1)
-      : Math.max(idx - 1, 0)
-    onTabClick(tabs[nextIdx])
-    tick().then(() => {
-      (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus()
-    })
-  }
+function onTabBarKeydown(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  const idx = tabs.indexOf(activeTab ?? '')
+  if (idx === -1) return
+  e.preventDefault()
+  const nextIdx = e.key === 'ArrowRight' ? Math.min(idx + 1, tabs.length - 1) : Math.max(idx - 1, 0)
+  onTabClick(tabs[nextIdx])
+  tick().then(() => {
+    ;(e.currentTarget as HTMLElement)
+      .querySelector<HTMLElement>('[role="tab"][tabindex="0"]')
+      ?.focus()
+  })
+}
 </script>
 
 <!-- svelte-ignore a11y_interactive_supports_focus -->

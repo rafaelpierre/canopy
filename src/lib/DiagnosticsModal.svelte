@@ -1,125 +1,168 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
-  import { get } from 'svelte/store'
-  import { diagnosticsByUri, openFilePath } from './stores'
-  import type { DiagnosticItem } from './stores'
-  import { basename } from './path'
+import { onDestroy } from 'svelte'
+import { get } from 'svelte/store'
+import { basename } from './path'
+import type { DiagnosticItem } from './stores'
+import {
+  activeSubproject,
+  diagnosticsByUriFiltered,
+  diagnosticsByUriUserCode,
+  diagnosticsScopeActive,
+  openFilePath,
+} from './stores'
 
-  interface Props {
-    open: boolean
-    onClose: () => void
-    onRevealLine: (line: number) => void
-    getFileContent: () => { path: string; content: string } | null
-  }
-  let { open, onClose, onRevealLine, getFileContent }: Props = $props()
+interface Props {
+  open: boolean
+  onClose: () => void
+  onRevealLine: (line: number) => void
+  getFileContent: () => { path: string; content: string } | null
+}
+let { open, onClose, onRevealLine, getFileContent }: Props = $props()
 
-  type Tab = 'errors' | 'warnings'
-  let activeTab = $state<Tab>('errors')
+type Tab = 'errors' | 'warnings'
+let activeTab = $state<Tab>('errors')
 
-  let allItems: DiagnosticItem[] = $state([])
-  let selectedIndex = $state(0)
-  let visibleCount  = $state(20)
-  let listEl: HTMLElement | undefined = $state(undefined)
-  let sentinelEl: HTMLElement | undefined = $state(undefined)
-  let observer: IntersectionObserver | null = null
-  let fileLines: string[] = $state([])
+let allItems: DiagnosticItem[] = $state([])
+let totalCount = $state(0) // unfiltered total — for the "Showing N of M" hint
+let scopeOn = $state(false)
+let scopeName = $state<string | null>(null)
+let selectedIndex = $state(0)
+let visibleCount = $state(20)
+let listEl: HTMLElement | undefined = $state(undefined)
+let sentinelEl: HTMLElement | undefined = $state(undefined)
+let observer: IntersectionObserver | null = null
+let fileLines: string[] = $state([])
 
-  let errors   = $derived(allItems.filter(i => i.severity === 8))
-  let warnings  = $derived(allItems.filter(i => i.severity === 4))
-  let items     = $derived(activeTab === 'errors' ? errors : warnings)
-  let visibleItems = $derived(items.slice(0, visibleCount))
+let errors = $derived(allItems.filter((i) => i.severity === 8))
+let warnings = $derived(allItems.filter((i) => i.severity === 4))
+let items = $derived(activeTab === 'errors' ? errors : warnings)
+let visibleItems = $derived(items.slice(0, visibleCount))
 
-  $effect(() => {
-    if (open) {
-      const map = get(diagnosticsByUri)
-      const flat: DiagnosticItem[] = []
-      for (const uriItems of map.values()) flat.push(...uriItems)
-      allItems = flat.sort((a, b) => {
-        if (a.severity !== b.severity) return b.severity - a.severity
-        if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath)
-        return a.startLineNumber - b.startLineNumber
-      })
-      selectedIndex = 0
-      // Default to errors tab if there are any, else warnings
-      activeTab = errors.length > 0 ? 'errors' : 'warnings'
-      visibleCount = 20
-      refreshFileLines()
-      requestAnimationFrame(() => listEl?.focus())
-    }
-  })
-
-  $effect(() => {
+$effect(() => {
+  if (open) {
+    scopeOn = get(diagnosticsScopeActive)
+    const sp = get(activeSubproject)
+    scopeName = sp ? (sp.split('/').pop() ?? sp) : null
+    const map = get(scopeOn ? diagnosticsByUriFiltered : diagnosticsByUriUserCode)
+    const fullMap = get(diagnosticsByUriUserCode)
+    let total = 0
+    for (const items of fullMap.values()) total += items.length
+    totalCount = total
+    const flat: DiagnosticItem[] = []
+    for (const uriItems of map.values()) flat.push(...uriItems)
+    allItems = flat.sort((a, b) => {
+      if (a.severity !== b.severity) return b.severity - a.severity
+      if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath)
+      return a.startLineNumber - b.startLineNumber
+    })
     selectedIndex = 0
+    // Default to errors tab if there are any, else warnings
+    activeTab = errors.length > 0 ? 'errors' : 'warnings'
     visibleCount = 20
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    activeTab  // reactive dependency
-  })
+    refreshFileLines()
+    requestAnimationFrame(() => listEl?.focus())
+  }
+})
 
-  $effect(() => {
-    if (sentinelEl && open) {
-      observer?.disconnect()
-      observer = new IntersectionObserver((entries) => {
+$effect(() => {
+  selectedIndex = 0
+  visibleCount = 20
+  // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+  activeTab // reactive dependency
+})
+
+$effect(() => {
+  if (sentinelEl && open) {
+    observer?.disconnect()
+    observer = new IntersectionObserver(
+      (entries) => {
         if (entries[0]?.isIntersecting && visibleCount < items.length) {
           visibleCount = Math.min(visibleCount + 20, items.length)
         }
-      }, { threshold: 0.1 })
-      observer.observe(sentinelEl)
-    }
-    return () => observer?.disconnect()
-  })
-
-  onDestroy(() => observer?.disconnect())
-
-  function refreshFileLines() {
-    const fc = getFileContent()
-    fileLines = fc ? fc.content.split('\n') : []
+      },
+      { threshold: 0.1 },
+    )
+    observer.observe(sentinelEl)
   }
+  return () => observer?.disconnect()
+})
 
-  function getExcerpt(item: DiagnosticItem): string {
-    const line = fileLines[item.startLineNumber - 1]
-    return line !== undefined ? line : ''
+onDestroy(() => observer?.disconnect())
+
+function refreshFileLines() {
+  const fc = getFileContent()
+  fileLines = fc ? fc.content.split('\n') : []
+}
+
+function getExcerpt(item: DiagnosticItem): string {
+  const line = fileLines[item.startLineNumber - 1]
+  return line !== undefined ? line : ''
+}
+
+function clickItem(item: DiagnosticItem, i: number) {
+  selectedIndex = i
+  onClose()
+  const currentFile = get(openFilePath)
+  if (item.filePath !== currentFile) {
+    openFilePath.set(item.filePath)
+    setTimeout(() => onRevealLine(item.startLineNumber), 120)
+  } else {
+    onRevealLine(item.startLineNumber)
   }
+}
 
-  function clickItem(item: DiagnosticItem, i: number) {
-    selectedIndex = i
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
     onClose()
-    const currentFile = get(openFilePath)
-    if (item.filePath !== currentFile) {
-      openFilePath.set(item.filePath)
-      setTimeout(() => onRevealLine(item.startLineNumber), 120)
-    } else {
-      onRevealLine(item.startLineNumber)
-    }
+    return
   }
-
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault()
-      activeTab = activeTab === 'errors' ? 'warnings' : 'errors'
-      return
-    }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      selectedIndex = Math.min(selectedIndex + 1, visibleItems.length - 1)
-      scrollSelected()
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      selectedIndex = Math.max(selectedIndex - 1, 0)
-      scrollSelected()
-    } else if (e.key === 'Enter' && visibleItems[selectedIndex]) {
-      e.preventDefault()
-      clickItem(visibleItems[selectedIndex], selectedIndex)
-    }
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault()
+    activeTab = activeTab === 'errors' ? 'warnings' : 'errors'
+    return
   }
-
-  function scrollSelected() {
-    requestAnimationFrame(() => {
-      listEl?.querySelector<HTMLElement>(`.dm-item.sel`)?.scrollIntoView({ block: 'nearest' })
-    })
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    selectedIndex = Math.min(selectedIndex + 1, visibleItems.length - 1)
+    scrollSelected()
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    selectedIndex = Math.max(selectedIndex - 1, 0)
+    scrollSelected()
+  } else if (e.key === 'Enter' && visibleItems[selectedIndex]) {
+    e.preventDefault()
+    clickItem(visibleItems[selectedIndex], selectedIndex)
   }
+}
 
-  function severityIcon(s: number) { return s === 8 ? '✕' : '⚠' }
+function scrollSelected() {
+  requestAnimationFrame(() => {
+    listEl?.querySelector<HTMLElement>(`.dm-item.sel`)?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function severityIcon(s: number) {
+  return s === 8 ? '✕' : '⚠'
+}
+
+function sortItems(items: DiagnosticItem[]) {
+  return items.sort(
+    (a, b) =>
+      b.severity - a.severity ||
+      a.filePath.localeCompare(b.filePath) ||
+      a.startLineNumber - b.startLineNumber,
+  )
+}
+
+function expandToWorkspace() {
+  scopeOn = false
+  const flat: DiagnosticItem[] = []
+  for (const items of get(diagnosticsByUriUserCode).values()) flat.push(...items)
+  allItems = sortItems(flat)
+  selectedIndex = 0
+  visibleCount = 20
+}
 </script>
 
 {#if open}
@@ -136,6 +179,11 @@
   >
     <div class="dm-header">
       <span id="dm-title" class="dm-title">Diagnostics</span>
+      {#if scopeOn && scopeName}
+        <button class="dm-scope-btn" title="Showing diagnostics scoped to {scopeName}. Click to show all." onclick={expandToWorkspace}>
+          Scoped to {scopeName} · {allItems.length} of {totalCount}
+        </button>
+      {/if}
     </div>
 
     <div class="dm-tabs">
@@ -265,6 +313,19 @@
     text-transform: uppercase;
     font-family: var(--font-mono);
   }
+
+  .dm-scope-btn {
+    margin-left: auto;
+    background: rgba(78, 161, 255, 0.12);
+    color: #4ea1ff;
+    border: 1px solid rgba(78, 161, 255, 0.25);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+  }
+  .dm-scope-btn:hover { background: rgba(78, 161, 255, 0.2); }
 
   /* Tabs */
   .dm-tabs {

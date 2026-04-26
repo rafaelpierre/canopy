@@ -1,43 +1,46 @@
 import { invoke, listen } from '$lib/ipc'
 import type { LspAdapter } from './adapter'
+
 type UnlistenFn = () => void
 
 export type LspPosition = { line: number; character: number }
-export type LspRange    = { start: LspPosition; end: LspPosition }
+export type LspRange = { start: LspPosition; end: LspPosition }
 
 export interface LspDiagnostic {
-  range:     LspRange
-  severity?: number  // 1=error, 2=warning, 3=info, 4=hint
-  message:   string
-  code?:     string | number
-  source?:   string
+  range: LspRange
+  severity?: number // 1=error, 2=warning, 3=info, 4=hint
+  message: string
+  code?: string | number
+  source?: string
 }
 
 export interface LspCompletionItem {
-  label:          string
-  kind?:          number
-  detail?:        string
+  label: string
+  kind?: number
+  detail?: string
   documentation?: string | { kind: string; value: string }
-  insertText?:    string
+  insertText?: string
 }
 
 type PendingRequest = { resolve: (v: any) => void; reject: (e: any) => void }
 
 class LspClient {
-  private msgId       = 0
-  private pending     = new Map<number, PendingRequest>()
-  private handlers    = new Map<string, (params: any) => void>()
+  private msgId = 0
+  private pending = new Map<number, PendingRequest>()
+  private handlers = new Map<string, (params: any) => void>()
   // Diagnostic notifications that arrived before onDiagnostics was registered
   private _bufferedDiags: Array<{ uri: string; diagnostics: any[] }> = []
-  private unlisten:              UnlistenFn | null = null
-  private _unlistenExit:         UnlistenFn | null = null
+  private unlisten: UnlistenFn | null = null
+  private _unlistenExit: UnlistenFn | null = null
   private _unlistenWatchedFiles: UnlistenFn | null = null
-  private openFiles   = new Map<string, number>()  // uri -> version
-  private _ready      = false
+  private openFiles = new Map<string, number>() // uri -> version
+  private _ready = false
   private _serverTokenTypes: string[] = []
-  private _adapter!:  LspAdapter
+  private _adapter!: LspAdapter
 
-  get serverTokenTypes(): string[] { return this._serverTokenTypes }
+  get serverTokenTypes(): string[] {
+    return this._serverTokenTypes
+  }
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -65,87 +68,124 @@ class LspClient {
     this.unlisten = await listen<string>('lsp://message', ({ payload }) => {
       this.dispatch(payload)
     })
-    this._unlistenWatchedFiles = await listen<Array<{ uri: string; type: number }>>('lsp:watched-files-changed', ({ payload }) => {
-      if (this._ready && payload.length > 0) {
-        this.notify('workspace/didChangeWatchedFiles', { changes: payload })
-      }
-    })
+    this._unlistenWatchedFiles = await listen<Array<{ uri: string; type: number }>>(
+      'lsp:watched-files-changed',
+      ({ payload }) => {
+        if (this._ready && payload.length > 0) {
+          this.notify('workspace/didChangeWatchedFiles', { changes: payload })
+        }
+      },
+    )
 
-    this._unlistenExit = await listen<{ code: number | null; signal: string | null }>('lsp://exit', () => {
-      if (this._ready) {
-        console.warn('[LSP] process exited unexpectedly')
-        this._ready = false
-        for (const p of this.pending.values()) p.reject(new Error('LSP process exited'))
-        this.pending.clear()
-      }
-    })
+    this._unlistenExit = await listen<{ code: number | null; signal: string | null }>(
+      'lsp://exit',
+      () => {
+        if (this._ready) {
+          console.warn('[LSP] process exited unexpectedly')
+          this._ready = false
+          for (const p of this.pending.values()) p.reject(new Error('LSP process exited'))
+          this.pending.clear()
+        }
+      },
+    )
 
     await invoke('lsp_start', {
       rootPath,
       langserverPath: langserverOverride ?? adapter.binaryName,
-      binaryArgs:     adapter.binaryArgs,
-      pythonPath:     pythonPath || undefined,
+      binaryArgs: adapter.binaryArgs,
+      pythonPath: pythonPath || undefined,
     })
 
     // LSP handshake — give the server generous time (large monorepos can
     // take much longer than the default 10s request timeout to initialize).
-    const initResult = await this.request('initialize', {
-      processId:  null,
-      rootUri:    pathToUri(rootPath),
-      rootPath,
-      capabilities: {
-        textDocument: {
-          synchronization: {
-            dynamicRegistration: false,
-            willSave: false,
-            willSaveWaitUntil: false,
-            didSave: false,
-          },
-          completion: {
-            dynamicRegistration: false,
-            completionItem: {
-              snippetSupport: false,
-              documentationFormat: ['plaintext'],
-              deprecatedSupport: false,
-              preselectSupport: false,
+    const initResult = await this.request(
+      'initialize',
+      {
+        processId: null,
+        rootUri: pathToUri(rootPath),
+        rootPath,
+        capabilities: {
+          textDocument: {
+            synchronization: {
+              dynamicRegistration: false,
+              willSave: false,
+              willSaveWaitUntil: false,
+              didSave: false,
+            },
+            completion: {
+              dynamicRegistration: false,
+              completionItem: {
+                snippetSupport: false,
+                documentationFormat: ['plaintext'],
+                deprecatedSupport: false,
+                preselectSupport: false,
+              },
+            },
+            hover: {
+              dynamicRegistration: false,
+              contentFormat: ['plaintext'],
+            },
+            definition: { dynamicRegistration: false },
+            references: { dynamicRegistration: false },
+            publishDiagnostics: { relatedInformation: true },
+            semanticTokens: {
+              dynamicRegistration: false,
+              requests: { full: true, range: false },
+              tokenTypes: [
+                'namespace',
+                'type',
+                'class',
+                'enum',
+                'interface',
+                'struct',
+                'typeParameter',
+                'parameter',
+                'variable',
+                'property',
+                'enumMember',
+                'event',
+                'function',
+                'method',
+                'macro',
+                'keyword',
+                'modifier',
+                'comment',
+                'string',
+                'number',
+                'regexp',
+                'operator',
+                'decorator',
+              ],
+              tokenModifiers: [
+                'declaration',
+                'definition',
+                'readonly',
+                'static',
+                'deprecated',
+                'abstract',
+                'async',
+                'modification',
+                'documentation',
+                'defaultLibrary',
+              ],
+              formats: ['relative'],
+              multilineTokenSupport: false,
+              overlappingTokenSupport: false,
             },
           },
-          hover: {
-            dynamicRegistration: false,
-            contentFormat: ['plaintext'],
-          },
-          definition:  { dynamicRegistration: false },
-          references:  { dynamicRegistration: false },
-          publishDiagnostics: { relatedInformation: true },
-          semanticTokens: {
-            dynamicRegistration: false,
-            requests: { full: true, range: false },
-            tokenTypes: [
-              'namespace', 'type', 'class', 'enum', 'interface', 'struct',
-              'typeParameter', 'parameter', 'variable', 'property', 'enumMember',
-              'event', 'function', 'method', 'macro', 'keyword', 'modifier',
-              'comment', 'string', 'number', 'regexp', 'operator', 'decorator',
-            ],
-            tokenModifiers: [
-              'declaration', 'definition', 'readonly', 'static', 'deprecated',
-              'abstract', 'async', 'modification', 'documentation', 'defaultLibrary',
-            ],
-            formats: ['relative'],
-            multilineTokenSupport: false,
-            overlappingTokenSupport: false,
+          workspace: {
+            applyEdit: false,
+            workspaceFolders: true,
+            configuration: true,
+            didChangeConfiguration: { dynamicRegistration: false },
+            didChangeWatchedFiles: { dynamicRegistration: true },
           },
         },
-        workspace: {
-          applyEdit: false,
-          workspaceFolders: true,
-          configuration: true,
-          didChangeConfiguration: { dynamicRegistration: false },
-          didChangeWatchedFiles:  { dynamicRegistration: true },
-        },
+        initializationOptions: adapter.initOptions(this._pythonPath, rootPath),
+        workspaceFolders: [{ uri: pathToUri(rootPath), name: 'workspace' }],
       },
-      initializationOptions: adapter.initOptions(this._pythonPath, rootPath),
-      workspaceFolders: [{ uri: pathToUri(rootPath), name: 'workspace' }],
-    }, 120_000)  // 2 min — basedpyright on huge monorepos can take this long to index
+      120_000,
+    ) // 2 min — basedpyright on huge monorepos can take this long to index
 
     // Capture the server's semantic token legend
     const legend = initResult?.capabilities?.semanticTokensProvider?.legend
@@ -179,8 +219,12 @@ class LspClient {
     await invoke('lsp_stop').catch(() => {})
   }
 
-  isReady(): boolean { return this._ready }
-  isOpen(filePath: string): boolean { return this.openFiles.has(pathToUri(filePath)) }
+  isReady(): boolean {
+    return this._ready
+  }
+  isOpen(filePath: string): boolean {
+    return this.openFiles.has(pathToUri(filePath))
+  }
 
   // -------------------------------------------------------------------------
   // Transport
@@ -188,7 +232,11 @@ class LspClient {
 
   private dispatch(raw: string): void {
     let msg: any
-    try { msg = JSON.parse(raw) } catch { return }
+    try {
+      msg = JSON.parse(raw)
+    } catch {
+      return
+    }
 
     // Handle server → client requests (like workspace/configuration)
     if (msg.id !== undefined && msg.method) {
@@ -256,8 +304,14 @@ class LspClient {
       }, timeoutMs)
 
       this.pending.set(id, {
-        resolve: (v) => { clearTimeout(timer); resolve(v) },
-        reject:  (e) => { clearTimeout(timer); reject(e) },
+        resolve: (v) => {
+          clearTimeout(timer)
+          resolve(v)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
       })
       invoke('lsp_send', { message: body }).catch((e) => {
         clearTimeout(timer)
@@ -364,10 +418,29 @@ class LspClient {
 
 // The token types we declared in capabilities — order matters!
 export const SEMANTIC_TOKEN_TYPES = [
-  'namespace', 'type', 'class', 'enum', 'interface', 'struct',
-  'typeParameter', 'parameter', 'variable', 'property', 'enumMember',
-  'event', 'function', 'method', 'macro', 'keyword', 'modifier',
-  'comment', 'string', 'number', 'regexp', 'operator', 'decorator',
+  'namespace',
+  'type',
+  'class',
+  'enum',
+  'interface',
+  'struct',
+  'typeParameter',
+  'parameter',
+  'variable',
+  'property',
+  'enumMember',
+  'event',
+  'function',
+  'method',
+  'macro',
+  'keyword',
+  'modifier',
+  'comment',
+  'string',
+  'number',
+  'regexp',
+  'operator',
+  'decorator',
 ]
 
 // ---------------------------------------------------------------------------

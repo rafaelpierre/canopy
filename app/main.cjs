@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, nativeTheme, session } = require('electron')
-const path = require('path')
-const fs = require('fs')
+const path = require('node:path')
+const fs = require('node:fs')
 
 // Force dark mode for the entire app (title bar, scrollbars, etc.)
 nativeTheme.themeSource = 'dark'
@@ -16,29 +16,29 @@ if (process.platform === 'linux') {
 
 let mainWindow = null
 let handlersRegistered = false
-let forceQuit  = false
+let forceQuit = false
 let quitPending = false
 
 const MIME_TYPES = {
   '.html': 'text/html',
-  '.js':   'text/javascript',
-  '.mjs':  'text/javascript',
-  '.css':  'text/css',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
   '.json': 'application/json',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.svg':  'image/svg+xml',
-  '.ico':  'image/x-icon',
-  '.ttf':  'font/ttf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.ttf': 'font/ttf',
   '.woff': 'font/woff',
-  '.woff2':'font/woff2',
+  '.woff2': 'font/woff2',
   '.wasm': 'application/wasm',
-  '.map':  'application/json',
+  '.map': 'application/json',
 }
 
 function createWindow() {
   // Reset quit-interception state so a re-created window starts clean
-  forceQuit  = false
+  forceQuit = false
   quitPending = false
 
   const isDev = !app.isPackaged
@@ -122,8 +122,8 @@ function createWindow() {
     ipcMain.handle('dialog:openFile', async (_event, options) => {
       const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openFile'],
-        title: (options && options.title) || 'Select File',
-        filters: options && options.filters,
+        title: options?.title || 'Select File',
+        filters: options?.filters,
       })
       if (result.canceled || result.filePaths.length === 0) return null
       return result.filePaths[0]
@@ -145,7 +145,7 @@ function createWindow() {
   // If the renderer crashes while a quit dialog is open, reset state so the
   // user can still close the (now-reloaded) window normally next time.
   mainWindow.webContents.on('render-process-gone', () => {
-    forceQuit  = false
+    forceQuit = false
     quitPending = false
   })
 
@@ -178,10 +178,11 @@ function createWindow() {
 
 // Register custom protocol before app is ready
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ])
 
-const CSP = "default-src 'self' app:; script-src 'self' app: 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' app: 'unsafe-inline'; worker-src blob: app:; connect-src 'self' app:; img-src 'self' data:; font-src 'self';"
+const CSP =
+  "default-src 'self' app:; script-src 'self' app: 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' app: 'unsafe-inline'; worker-src blob: app:; connect-src 'self' app:; img-src 'self' data:; font-src 'self';"
 
 app.whenReady().then(() => {
   const buildDir = path.join(__dirname, '..', 'build')
@@ -205,9 +206,7 @@ app.whenReady().then(() => {
 
     // Hashed assets under _app/immutable/ never change — cache forever
     const isImmutable = pathname.startsWith('/_app/immutable/')
-    const cacheControl = isImmutable
-      ? 'public, max-age=31536000, immutable'
-      : 'no-cache'
+    const cacheControl = isImmutable ? 'public, max-age=31536000, immutable' : 'no-cache'
 
     try {
       const data = await fs.promises.readFile(filePath)

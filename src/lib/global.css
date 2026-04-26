@@ -1,33 +1,40 @@
 /* ---- Design tokens ---- */
 :root {
-  --bg-editor:    #1c1c1c;
-  --bg-panel:     #222222;
-  --bg-hover:     #2a2a2a;
-  --bg-active:    #2f2f2f;
+  --bg-editor: #1c1c1c;
+  --bg-panel: #222222;
+  --bg-hover: #2a2a2a;
+  --bg-active: #2f2f2f;
   --bg-statusbar: #181818;
 
-  --border:       #303030;
+  --border: #303030;
   --border-focus: #444444;
 
-  --text-primary:   #d4d4d4;
+  --text-primary: #d4d4d4;
   --text-secondary: #949494;
-  --text-muted:     #767676;
+  --text-muted: #767676;
 
-  --accent:     #7b8cde;
+  --accent: #7b8cde;
   --accent-dim: rgba(123, 140, 222, 0.15);
 
-  --error:   #e06c75;
+  --error: #e06c75;
   --warning: #e5c07b;
   --success: #98c379;
 
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
-  --font-ui:   var(--font-mono);
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", monospace;
+  --font-ui: var(--font-mono);
 }
 
 /* ---- Reset ---- */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-html, body {
+html,
+body {
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -41,7 +48,9 @@ html, body {
 }
 
 /* Allow selection only in editor and terminal areas */
-.selectable { user-select: text; }
+.selectable {
+  user-select: text;
+}
 
 /* Keyboard focus indicator */
 :focus-visible {
@@ -51,7 +60,9 @@ html, body {
 
 /* Respect reduced-motion preference */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
@@ -68,13 +79,22 @@ html, body {
 }
 
 /* Prevent webview-level zoom — we handle font size ourselves */
-body { touch-action: pan-x pan-y; }
+body {
+  touch-action: pan-x pan-y;
+}
 
 /* Scrollbars */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}

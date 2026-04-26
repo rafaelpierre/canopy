@@ -21,6 +21,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "lint": "biome check src/ app/",
+    "lint:fix": "biome check --write src/ app/",
+    "format": "biome format --write src/ app/",
     "postinstall": "electron-rebuild -f -w node-pty-prebuilt-multiarch && npm dedupe --quiet"
   },
   "license": "MIT",
@@ -31,6 +34,7 @@
     "node-pty-prebuilt-multiarch": "^0.10.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.13",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.57.1",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
@@ -93,7 +97,9 @@
       ],
       "artifactName": "canopy-mac-${arch}-${version}.${ext}",
       "category": "public.app-category.developer-tools",
-      "electronLanguages": ["en"]
+      "electronLanguages": [
+        "en"
+      ]
     },
     "win": {
       "target": [

@@ -1,82 +1,124 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+import { onMount } from 'svelte'
 
-  interface Props {
-    onOpenFolder:              () => void
-    onToggleTree:              () => void
-    onToggleTerminal:          () => void
-    onZoomIn:                  () => void
-    onZoomOut:                 () => void
-    onZoomReset:               () => void
-    onCommandPalette:          () => void
-    onCommandPaletteCommands:  () => void
-    onNewTerminalTab:          () => void
-    onSplitTerminal:           () => void
-  }
+interface Props {
+  onOpenFolder: () => void
+  onToggleTree: () => void
+  onToggleTerminal: () => void
+  onZoomIn: () => void
+  onZoomOut: () => void
+  onZoomReset: () => void
+  onCommandPalette: () => void
+  onCommandPaletteCommands: () => void
+  onNewTerminalTab: () => void
+  onSplitTerminal: () => void
+}
 
-  let {
-    onOpenFolder,
-    onToggleTree,
-    onToggleTerminal,
-    onZoomIn,
-    onZoomOut,
-    onZoomReset,
-    onCommandPalette,
-    onCommandPaletteCommands,
-    onNewTerminalTab,
-    onSplitTerminal,
-  }: Props = $props()
+let {
+  onOpenFolder,
+  onToggleTree,
+  onToggleTerminal,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onCommandPalette,
+  onCommandPaletteCommands,
+  onNewTerminalTab,
+  onSplitTerminal,
+}: Props = $props()
 
-  let invoke: any
-  let openMenu: string | null = $state(null)
-  const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
+let invoke: any
+let openMenu: string | null = $state(null)
+const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
 
-  onMount(async () => {
-    const ipc = await import('$lib/ipc')
-    invoke = ipc.invoke
-  })
+onMount(async () => {
+  const ipc = await import('$lib/ipc')
+  invoke = ipc.invoke
+})
 
-  function toggleMenu(name: string, e: MouseEvent) {
-    e.stopPropagation()
-    openMenu = openMenu === name ? null : name
-  }
+function toggleMenu(name: string, e: MouseEvent) {
+  e.stopPropagation()
+  openMenu = openMenu === name ? null : name
+}
 
-  function closeMenu() { openMenu = null }
+function closeMenu() {
+  openMenu = null
+}
 
-  function run(fn: () => void) {
-    closeMenu()
-    fn()
-  }
+function run(fn: () => void) {
+  closeMenu()
+  fn()
+}
 
-  const MENUS = {
-    File: [
-      { label: 'Open Folder…', key: 'Cmd+O',  action: () => run(onOpenFolder) },
-    ],
-    Edit: [
-      { label: 'Undo',         key: 'Cmd+Z',       action: () => { closeMenu(); document.execCommand('undo') } },
-      { label: 'Redo',         key: 'Cmd+Shift+Z',  action: () => { closeMenu(); document.execCommand('redo') } },
-      { separator: true },
-      { label: 'Cut',          key: 'Cmd+X',       action: () => { closeMenu(); document.execCommand('cut') } },
-      { label: 'Copy',         key: 'Cmd+C',       action: () => { closeMenu(); document.execCommand('copy') } },
-      { label: 'Paste',        key: 'Cmd+V',       action: () => { closeMenu(); document.execCommand('paste') } },
-      { label: 'Select All',   key: 'Cmd+A',       action: () => { closeMenu(); document.execCommand('selectAll') } },
-    ],
-    View: [
-      { label: 'Toggle File Tree',   key: 'Cmd+B',        action: () => run(onToggleTree) },
-      { label: 'Toggle Terminal',    key: 'Cmd+J',        action: () => run(onToggleTerminal) },
-      { separator: true },
-      { label: 'Zoom In',            key: 'Cmd+=',        action: () => run(onZoomIn) },
-      { label: 'Zoom Out',           key: 'Cmd+−',        action: () => run(onZoomOut) },
-      { label: 'Reset Zoom',         key: 'Cmd+0',        action: () => run(onZoomReset) },
-      { separator: true },
-      { label: 'Go to File',         key: 'Cmd+P',        action: () => run(onCommandPalette) },
-      { label: 'Command Palette',    key: 'Cmd+Shift+P',  action: () => run(onCommandPaletteCommands) },
-    ],
-    Terminal: [
-      { label: 'New Terminal Tab',   key: 'Cmd+T',  action: () => run(onNewTerminalTab) },
-      { label: 'Split Terminal',     key: '',       action: () => run(onSplitTerminal) },
-    ],
-  } as const
+const MENUS = {
+  File: [{ label: 'Open Folder…', key: 'Cmd+O', action: () => run(onOpenFolder) }],
+  Edit: [
+    {
+      label: 'Undo',
+      key: 'Cmd+Z',
+      action: () => {
+        closeMenu()
+        document.execCommand('undo')
+      },
+    },
+    {
+      label: 'Redo',
+      key: 'Cmd+Shift+Z',
+      action: () => {
+        closeMenu()
+        document.execCommand('redo')
+      },
+    },
+    { separator: true },
+    {
+      label: 'Cut',
+      key: 'Cmd+X',
+      action: () => {
+        closeMenu()
+        document.execCommand('cut')
+      },
+    },
+    {
+      label: 'Copy',
+      key: 'Cmd+C',
+      action: () => {
+        closeMenu()
+        document.execCommand('copy')
+      },
+    },
+    {
+      label: 'Paste',
+      key: 'Cmd+V',
+      action: () => {
+        closeMenu()
+        document.execCommand('paste')
+      },
+    },
+    {
+      label: 'Select All',
+      key: 'Cmd+A',
+      action: () => {
+        closeMenu()
+        document.execCommand('selectAll')
+      },
+    },
+  ],
+  View: [
+    { label: 'Toggle File Tree', key: 'Cmd+B', action: () => run(onToggleTree) },
+    { label: 'Toggle Terminal', key: 'Cmd+J', action: () => run(onToggleTerminal) },
+    { separator: true },
+    { label: 'Zoom In', key: 'Cmd+=', action: () => run(onZoomIn) },
+    { label: 'Zoom Out', key: 'Cmd+−', action: () => run(onZoomOut) },
+    { label: 'Reset Zoom', key: 'Cmd+0', action: () => run(onZoomReset) },
+    { separator: true },
+    { label: 'Go to File', key: 'Cmd+P', action: () => run(onCommandPalette) },
+    { label: 'Command Palette', key: 'Cmd+Shift+P', action: () => run(onCommandPaletteCommands) },
+  ],
+  Terminal: [
+    { label: 'New Terminal Tab', key: 'Cmd+T', action: () => run(onNewTerminalTab) },
+    { label: 'Split Terminal', key: '', action: () => run(onSplitTerminal) },
+  ],
+} as const
 </script>
 
 <svelte:window onclick={closeMenu} />

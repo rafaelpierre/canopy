@@ -8,7 +8,7 @@ export async function invoke<T = any>(command: string, args?: Record<string, any
   return Promise.race([
     api.invoke(command, args),
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`IPC timeout: ${command}`)), IPC_TIMEOUT_MS)
+      setTimeout(() => reject(new Error(`IPC timeout: ${command}`)), IPC_TIMEOUT_MS),
     ),
   ])
 }

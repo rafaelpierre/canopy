@@ -13,7 +13,7 @@ const KNOWN_LSP_BINARIES = new Set(['basedpyright-langserver', 'ty'])
 // Allowed spawn arguments per binary — never accept renderer-supplied args directly
 const ALLOWED_LSP_ARGS = {
   'basedpyright-langserver': ['--stdio'],
-  'ty': ['server'],
+  ty: ['server'],
 }
 
 function validateLangserverPath(langserverPath) {
@@ -64,7 +64,7 @@ function readLspMessages(stdout, onMessage) {
         continue
       }
 
-      const MAX_LSP_MESSAGE = 10 * 1024 * 1024  // 10 MB
+      const MAX_LSP_MESSAGE = 10 * 1024 * 1024 // 10 MB
       if (contentLength > MAX_LSP_MESSAGE) {
         console.error('[LSP] oversized message (' + contentLength + ' bytes), closing connection')
         stdout.destroy()
@@ -110,9 +110,13 @@ function registerLspHandlers(ipcMain, mainWindow) {
       lspStdin = null
     }
 
-    const langserver = validateLangserverPath(langserverPath) || findBinary('basedpyright-langserver')
+    const langserver =
+      validateLangserverPath(langserverPath) || findBinary('basedpyright-langserver')
     console.log('[LSP] resolved langserver:', langserver, 'from request:', langserverPath)
-    if (!langserver) throw new Error(`LSP binary not found: ${langserverPath} (checked PATH + ~/.cargo/bin, ~/.local/bin, ~/.astral/bin, /opt/homebrew/bin)`)
+    if (!langserver)
+      throw new Error(
+        `LSP binary not found: ${langserverPath} (checked PATH + ~/.cargo/bin, ~/.local/bin, ~/.astral/bin, /opt/homebrew/bin)`,
+      )
 
     const binaryBasename = path.basename(langserver)
     const baseArgs = ALLOWED_LSP_ARGS[binaryBasename] ?? ['--stdio']
@@ -127,14 +131,22 @@ function registerLspHandlers(ipcMain, mainWindow) {
     let extraEnv = {}
     if (binaryBasename === 'ty' && pythonPath) {
       try {
-        const rawPath = path.isAbsolute(String(pythonPath)) ? String(pythonPath) : (findBinary(String(pythonPath)) ?? '')
+        const rawPath = path.isAbsolute(String(pythonPath))
+          ? String(pythonPath)
+          : (findBinary(String(pythonPath)) ?? '')
         if (rawPath) {
-          // SEC-5: resolve symlinks to prevent path traversal via crafted pythonPath
-          const p = fs.realpathSync(rawPath)
-          const venvRoot = path.dirname(path.dirname(p))
+          // Do NOT realpath here: uv venvs use a symlink to ~/.local/share/uv/python/...
+          // which dereferences out of the venv and breaks the pyvenv.cfg check below.
+          // The path-traversal concern (SEC-5) is mitigated upstream — pythonPath
+          // comes from the renderer's pythonCmd store, which is only ever set by
+          // walk-up venv discovery (project-bounded) or the manual interpreter picker.
+          const lex = path.resolve(rawPath)
+          const venvRoot = path.dirname(path.dirname(lex))
           if (fs.existsSync(path.join(venvRoot, 'pyvenv.cfg'))) {
             extraEnv = { VIRTUAL_ENV: venvRoot }
             console.log('[LSP] ty: VIRTUAL_ENV =', venvRoot)
+          } else {
+            console.log('[LSP] ty: no pyvenv.cfg at', venvRoot, '— starting without VIRTUAL_ENV')
           }
         }
       } catch (e) {
@@ -180,7 +192,9 @@ function registerLspHandlers(ipcMain, mainWindow) {
         lspProcess = null
         lspStdin = null
         // Notify renderer so it can mark LSP as not ready
-        try { mainWindow.webContents.send('lsp://exit', { code, signal }) } catch (_) {}
+        try {
+          mainWindow.webContents.send('lsp://exit', { code, signal })
+        } catch (_) {}
       }
     })
   })
@@ -214,7 +228,10 @@ function registerLspHandlers(ipcMain, mainWindow) {
     }
     return new Promise((resolve, reject) => {
       const uvPath = which('uv')
-      if (!uvPath) { reject(new Error('uv not found on PATH')); return }
+      if (!uvPath) {
+        reject(new Error('uv not found on PATH'))
+        return
+      }
 
       const proc = spawn(uvPath, ['tool', 'install', tool], {
         env: safeEnvObject({}),

@@ -1,4 +1,12 @@
 /**
+ * Returns true when `child` is `parent` or is directly inside it
+ * (directory-boundary-aware: "foo/bar" is under "foo", but "foobar" is not).
+ */
+export function isUnder(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent + '/')
+}
+
+/**
  * Returns the last path segment (filename) from a POSIX-style path.
  */
 export function basename(p: string): string {

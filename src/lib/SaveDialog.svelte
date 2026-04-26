@@ -1,59 +1,58 @@
 <script lang="ts">
-  import BaseModal from './BaseModal.svelte'
-  import { basename } from './path'
+import BaseModal from './BaseModal.svelte'
+import { basename } from './path'
 
-  export type SaveDialogType =
-    | { kind: 'close-tab';    path: string }
-    | { kind: 'close-app';    paths: string[] }
-    | { kind: 'disk-conflict'; path: string }
+export type SaveDialogType =
+  | { kind: 'close-tab'; path: string }
+  | { kind: 'close-app'; paths: string[] }
+  | { kind: 'disk-conflict'; path: string }
 
-  interface Props {
-    dialog:    SaveDialogType | null
-    onSave:    () => void
-    onDiscard: () => void
-    onCancel:  () => void
+interface Props {
+  dialog: SaveDialogType | null
+  onSave: () => void
+  onDiscard: () => void
+  onCancel: () => void
+}
+let { dialog, onSave, onDiscard, onCancel }: Props = $props()
+
+let title = $derived(getTitle(dialog))
+let body = $derived(getBody(dialog))
+let saveLabel = $derived(getSaveLabel(dialog))
+let discardLabel = $derived(getDiscardLabel(dialog))
+let files = $derived(dialog?.kind === 'close-app' ? dialog.paths : [])
+let isConflict = $derived(dialog?.kind === 'disk-conflict')
+
+function getTitle(d: SaveDialogType | null) {
+  if (!d) return ''
+  if (d.kind === 'disk-conflict') return 'File Changed on Disk'
+  return 'Unsaved Changes'
+}
+
+function getBody(d: SaveDialogType | null) {
+  if (!d) return ''
+  if (d.kind === 'close-tab') return `"${basename(d.path)}" has unsaved changes.`
+  if (d.kind === 'close-app') {
+    const n = d.paths.length
+    return `You have unsaved changes in ${n} file${n !== 1 ? 's' : ''}. Save before quitting?`
   }
-  let { dialog, onSave, onDiscard, onCancel }: Props = $props()
+  if (d.kind === 'disk-conflict')
+    return `"${basename(d.path)}" was modified outside of Canopy while you have unsaved edits. What would you like to do?`
+  return ''
+}
 
-  let title        = $derived(getTitle(dialog))
-  let body         = $derived(getBody(dialog))
-  let saveLabel    = $derived(getSaveLabel(dialog))
-  let discardLabel = $derived(getDiscardLabel(dialog))
-  let files        = $derived(dialog?.kind === 'close-app' ? dialog.paths : [])
-  let isConflict   = $derived(dialog?.kind === 'disk-conflict')
+function getSaveLabel(d: SaveDialogType | null) {
+  if (!d) return 'Save'
+  if (d.kind === 'close-app') return 'Save All'
+  if (d.kind === 'disk-conflict') return 'Keep My Changes'
+  return 'Save'
+}
 
-  function getTitle(d: SaveDialogType | null) {
-    if (!d) return ''
-    if (d.kind === 'disk-conflict') return 'File Changed on Disk'
-    return 'Unsaved Changes'
-  }
-
-  function getBody(d: SaveDialogType | null) {
-    if (!d) return ''
-    if (d.kind === 'close-tab')
-      return `"${basename(d.path)}" has unsaved changes.`
-    if (d.kind === 'close-app') {
-      const n = d.paths.length
-      return `You have unsaved changes in ${n} file${n !== 1 ? 's' : ''}. Save before quitting?`
-    }
-    if (d.kind === 'disk-conflict')
-      return `"${basename(d.path)}" was modified outside of Canopy while you have unsaved edits. What would you like to do?`
-    return ''
-  }
-
-  function getSaveLabel(d: SaveDialogType | null) {
-    if (!d) return 'Save'
-    if (d.kind === 'close-app') return 'Save All'
-    if (d.kind === 'disk-conflict') return 'Keep My Changes'
-    return 'Save'
-  }
-
-  function getDiscardLabel(d: SaveDialogType | null) {
-    if (!d) return "Don't Save"
-    if (d.kind === 'disk-conflict') return 'Reload from Disk'
-    if (d.kind === 'close-tab') return 'Close Without Saving'
-    return "Don't Save"
-  }
+function getDiscardLabel(d: SaveDialogType | null) {
+  if (!d) return "Don't Save"
+  if (d.kind === 'disk-conflict') return 'Reload from Disk'
+  if (d.kind === 'close-tab') return 'Close Without Saving'
+  return "Don't Save"
+}
 </script>
 
 <BaseModal open={dialog !== null} onClose={onCancel} width="420px">

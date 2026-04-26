@@ -1,4 +1,8 @@
-export interface GitignoreRule { regex: RegExp; negated: boolean; dirOnly: boolean }
+export interface GitignoreRule {
+  regex: RegExp
+  negated: boolean
+  dirOnly: boolean
+}
 
 export function gitPatternToRegex(pattern: string, anchored: boolean): RegExp {
   const s = pattern
@@ -26,7 +30,9 @@ export function parseGitignore(content: string): GitignoreRule[] {
     const anchored = line.startsWith('/')
     if (anchored) line = line.slice(1)
     if (!line) continue
-    try { rules.push({ regex: gitPatternToRegex(line, anchored), negated, dirOnly }) } catch {}
+    try {
+      rules.push({ regex: gitPatternToRegex(line, anchored), negated, dirOnly })
+    } catch {}
   }
   return rules
 }

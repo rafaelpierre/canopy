@@ -1,0 +1,40 @@
+# Diagnostics Scoping for Monorepos
+
+**Status:** done · April 26 2026
+
+## Problem
+In a monorepo with multiple venvs / subprojects, the diagnostics panel and status-bar counts surfaced errors and warnings from the entire workspace. When working inside one subproject, sibling-subproject noise pushed real signal off-screen.
+
+## Solution
+Filter diagnostics to the **active subproject** — defined as the deepest venv whose `subdir` contains the currently-open file. Filtering is automatic when the workspace has ≥2 venvs and the active file lives under one of them; off otherwise.
+
+## Implementation
+
+### Stores (`src/lib/stores.ts`)
+- `activeSubproject: string | null` — derived from `openFilePath` + `venvMap`. Returns the longest-prefix-matching `venvMap.subdir`.
+- `diagnosticsScopeActive: boolean` — true when `venvMap.length ≥ 2` and `activeSubproject !== null`.
+- `diagnosticsByUriFiltered` — derived view of `diagnosticsByUri`, narrowed to files under `activeSubproject` when scoping is active.
+- `diagnostics` (counts) and `diagnosticFileSets` (path sets) now read from the filtered view.
+- `diagnosticsTotal` — unfiltered counts, for the "N of M" affordance.
+
+### UI surfaces auto-updated
+- Status-bar diagnostic count (reads `diagnostics`).
+- File-tree red/yellow dots (read `diagnosticFileSets`).
+- Diagnostics modal item list (reads `diagnosticsByUriFiltered`).
+
+### Affordance
+DiagnosticsModal shows a small pill in the header when scoping is active:
+`Scoped to <subproject_basename> · N of M` — click to expand to the full workspace view for the current modal session.
+
+## Edge cases handled
+- Active file outside any venv subdir → falls back to workspace-wide (no filter).
+- Single-venv project → no filter (would degenerate to "everything").
+- File ranks across multiple matching venvs → uses the deepest (longest path) match, mirroring how walk-up venv discovery works.
+
+## Files touched
+- `src/lib/stores.ts` — derived stores + helpers.
+- `src/lib/DiagnosticsModal.svelte` — read filtered map, expand-to-workspace button, scope pill styling.
+
+## Future work (not in scope here)
+- Persisted user preference (`diagnostics.scope: 'subproject' | 'workspace'`) to override the auto-default.
+- Group-by-subproject view in the diagnostics modal when scoping is off.

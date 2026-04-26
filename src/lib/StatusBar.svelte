@@ -1,186 +1,256 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+import { onDestroy, onMount } from 'svelte'
 
-  interface Props { showToast?: (msg: string, duration?: number) => void }
-  let { showToast }: Props = $props()
+type ToastKind = 'info' | 'success' | 'warning' | 'error'
+interface Props {
+  showToast?: (msg: string, duration?: number, kind?: ToastKind) => void
+}
+let { showToast }: Props = $props()
 
-  let _diagnostics     = $state({ errors: 0, warnings: 0 })
-  let _fileErrors      = $state(0)
-  let _fileWarnings    = $state(0)
-  let _diagByUri       = $state<Map<string, any[]>>(new Map())
-  let _lspStatus       = $state<string>('stopped')
-  let _lspBusy         = $state(false)
-  let _venvScanning    = $state(false)
-  let _installing      = $state(false)
-  let _installPending  = $state<string | null>(null)  // lspId awaiting confirmation
-  let _openFile        = $state<string | null>(null)
-  let _pythonCmd       = $state('python3')
-  let _venvMap         = $state<any[]>([])
-  let _projectRoot     = $state<string | null>(null)
-  let _activeLsp       = $state<string>('basedpyright')
-  let stores: any
-  let invoke: any
-  let _clickCleanup: (() => void) | null = null
-  let lspCtxMenu: { x: number; bottom: number; right: number } | null = $state(null)
-  let venvMenu: { x: number; bottom: number } | null = $state(null)
+let _diagnostics = $state({ errors: 0, warnings: 0 })
+let _fileErrors = $state(0)
+let _fileWarnings = $state(0)
+let _diagByUri = $state<Map<string, any[]>>(new Map())
+let _lspStatus = $state<string>('stopped')
+let _lspBusy = $state(false)
+let _venvScanning = $state(false)
+let _installing = $state(false)
+let _installPending = $state<string | null>(null) // lspId awaiting confirmation
+let _openFile = $state<string | null>(null)
+let _pythonCmd = $state('python3')
+let _venvMap = $state<any[]>([])
+let _projectRoot = $state<string | null>(null)
+let _activeLsp = $state<string>('basedpyright')
+let stores: any
+let invoke: any
+let _clickCleanup: (() => void) | null = null
+let lspCtxMenu: { x: number; bottom: number; right: number } | null = $state(null)
+let venvMenu: { x: number; bottom: number } | null = $state(null)
 
-  function recomputeFileCounts(map: Map<string, any[]>, path: string | null) {
-    if (!path) { _fileErrors = 0; _fileWarnings = 0; return }
-    // Key must match what the LSP sends back — same encoding as pathToUri in client.ts
-    const uri = encodeURI('file://' + path)
-    const items = map.get(uri) ?? []
-    let errors = 0, warnings = 0
-    for (const d of items) {
-      if (d.severity === 8) errors++
-      else if (d.severity === 4) warnings++
-    }
-    _fileErrors = errors
-    _fileWarnings = warnings
+function recomputeFileCounts(map: Map<string, any[]>, path: string | null) {
+  if (!path) {
+    _fileErrors = 0
+    _fileWarnings = 0
+    return
   }
+  // Key must match what the LSP sends back — same encoding as pathToUri in client.ts
+  const uri = encodeURI('file://' + path)
+  const items = map.get(uri) ?? []
+  let errors = 0,
+    warnings = 0
+  for (const d of items) {
+    if (d.severity === 8) errors++
+    else if (d.severity === 4) warnings++
+  }
+  _fileErrors = errors
+  _fileWarnings = warnings
+}
 
-  onMount(async () => {
-    const ipcMod = await import('$lib/ipc')
-    invoke = ipcMod.invoke
-    stores = await import('./stores')
-    const _unsubs: (() => void)[] = []
-    _unsubs.push(stores.diagnostics.subscribe((v: any) => { _diagnostics = v }))
-    _unsubs.push(stores.diagnosticsByUri.subscribe((map: any) => {
+onMount(async () => {
+  const ipcMod = await import('$lib/ipc')
+  invoke = ipcMod.invoke
+  stores = await import('./stores')
+  const _unsubs: (() => void)[] = []
+  _unsubs.push(
+    stores.diagnostics.subscribe((v: any) => {
+      _diagnostics = v
+    }),
+  )
+  _unsubs.push(
+    stores.diagnosticsByUri.subscribe((map: any) => {
       _diagByUri = map
       recomputeFileCounts(map, _openFile)
-    }))
-    _unsubs.push(stores.lspStatus.subscribe((v: any) => { _lspStatus = v }))
-    _unsubs.push(stores.lspBusy.subscribe((v: any) => { _lspBusy = v }))
-    _unsubs.push(stores.venvScanning.subscribe((v: any) => { _venvScanning = v }))
-    _unsubs.push(stores.openFilePath.subscribe((v: any) => {
+    }),
+  )
+  _unsubs.push(
+    stores.lspStatus.subscribe((v: any) => {
+      _lspStatus = v
+    }),
+  )
+  _unsubs.push(
+    stores.lspBusy.subscribe((v: any) => {
+      _lspBusy = v
+    }),
+  )
+  _unsubs.push(
+    stores.venvScanning.subscribe((v: any) => {
+      _venvScanning = v
+    }),
+  )
+  _unsubs.push(
+    stores.openFilePath.subscribe((v: any) => {
       _openFile = v
       recomputeFileCounts(_diagByUri, v)
-    }))
-    _unsubs.push(stores.pythonCmd.subscribe((v: any) => { _pythonCmd = v }))
-    _unsubs.push(stores.venvMap.subscribe((v: any) => { _venvMap = v }))
-    _unsubs.push(stores.projectRoot.subscribe((v: any) => { _projectRoot = v }))
-    _unsubs.push(stores.activeLsp.subscribe((v: any) => { _activeLsp = v }))
-    window.addEventListener('click', closeAllMenus)
-    _clickCleanup = () => {
-      window.removeEventListener('click', closeAllMenus)
-      for (const u of _unsubs) u()
-    }
+    }),
+  )
+  _unsubs.push(
+    stores.pythonCmd.subscribe((v: any) => {
+      _pythonCmd = v
+    }),
+  )
+  _unsubs.push(
+    stores.venvMap.subscribe((v: any) => {
+      _venvMap = v
+    }),
+  )
+  _unsubs.push(
+    stores.projectRoot.subscribe((v: any) => {
+      _projectRoot = v
+    }),
+  )
+  _unsubs.push(
+    stores.activeLsp.subscribe((v: any) => {
+      _activeLsp = v
+    }),
+  )
+  window.addEventListener('click', closeAllMenus)
+  _clickCleanup = () => {
+    window.removeEventListener('click', closeAllMenus)
+    for (const u of _unsubs) u()
+  }
+})
+
+onDestroy(() => _clickCleanup?.())
+
+let filename = $derived(_openFile ? _openFile.split('/').pop() : null)
+
+function pythonLabel(cmd: string): string {
+  if (cmd.includes('.venv') || cmd.includes('venv')) {
+    const parts = cmd.split('/')
+    const venvIdx = parts.findIndex(
+      (p) => p === '.venv' || p === 'venv' || p === '.env' || p === 'env',
+    )
+    if (venvIdx >= 0) return `(${parts[venvIdx]}) python`
+  }
+  return cmd.split('/').pop() ?? cmd
+}
+
+// Status-bar label for the currently-active interpreter. When pythonCmd matches
+// a known venv in venvMap, render it the same way the picker does — `(.venv uv) · subdir`
+// — using the project basename for a root-level venv. Falls back to pythonLabel otherwise.
+function activePythonLabel(cmd: string, venvs: any[], projectRoot: string | null): string {
+  const v = venvs.find((x) => x.pythonPath === cmd)
+  if (!v) return pythonLabel(cmd)
+  const venvName = v.venvPath.split('/').pop() ?? '.venv'
+  const uvTag = v.isUv ? ' uv' : ''
+  let display: string
+  if (!projectRoot || v.subdir === projectRoot) {
+    display = projectRoot ? (projectRoot.split('/').pop() ?? '.') : '.'
+  } else {
+    display = v.subdir.replace(projectRoot + '/', '')
+  }
+  return `(${venvName}${uvTag}) · ${display}`
+}
+
+async function selectPython() {
+  const { openFileDialog } = await import('$lib/ipc')
+  const selected = await openFileDialog({
+    title: 'Select Python Interpreter',
+    filters: [{ name: 'Python', extensions: ['*'] }],
   })
-
-  onDestroy(() => _clickCleanup?.())
-
-  let filename = $derived(_openFile ? _openFile.split('/').pop() : null)
-
-  function pythonLabel(cmd: string): string {
-    if (cmd.includes('.venv') || cmd.includes('venv')) {
-      const parts = cmd.split('/')
-      const venvIdx = parts.findIndex(p => p === '.venv' || p === 'venv' || p === '.env' || p === 'env')
-      if (venvIdx >= 0) return `(${parts[venvIdx]}) python`
-    }
-    return cmd.split('/').pop() ?? cmd
+  if (selected && typeof selected === 'string') {
+    stores.pythonCmd.set(selected)
   }
+}
 
-  async function selectPython() {
-    const { openFileDialog } = await import('$lib/ipc')
-    const selected = await openFileDialog({
-      title: 'Select Python Interpreter',
-      filters: [{ name: 'Python', extensions: ['*'] }],
-    })
-    if (selected && typeof selected === 'string') {
-      stores.pythonCmd.set(selected)
-    }
+function closeAllMenus() {
+  lspCtxMenu = null
+  venvMenu = null
+}
+function closeLspCtxMenu() {
+  lspCtxMenu = null
+}
+
+function venvLabel(v: any, projectRoot: string | null): string {
+  if (!projectRoot) return pythonLabel(v.pythonPath)
+  const rel = v.subdir === projectRoot ? '.' : v.subdir.replace(projectRoot + '/', '')
+  const venvName = v.venvPath.split('/').pop() ?? '.venv'
+  const uvTag = v.isUv ? ' uv' : ''
+  return `(${venvName}${uvTag}) · ${rel}`
+}
+
+function showVenvMenu(e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  lspCtxMenu = null
+  const target = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  venvMenu = { x: target.left, bottom: window.innerHeight - target.top + 2 }
+}
+
+async function pickVenv(pythonPath: string) {
+  venvMenu = null
+  stores.pythonCmd.set(pythonPath)
+}
+
+function lspMenuFocus(node: HTMLElement) {
+  requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+  return {}
+}
+
+function showLspMenu(e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  const target = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  lspCtxMenu = {
+    x: target.left,
+    bottom: window.innerHeight - target.top + 2,
+    right: window.innerWidth - target.right,
   }
+}
 
-  function closeAllMenus() { lspCtxMenu = null; venvMenu = null }
-  function closeLspCtxMenu() { lspCtxMenu = null }
-
-  function venvLabel(v: any, projectRoot: string | null): string {
-    if (!projectRoot) return pythonLabel(v.pythonPath)
-    const rel = v.subdir === projectRoot ? '.' : v.subdir.replace(projectRoot + '/', '')
-    const venvName = v.venvPath.split('/').pop() ?? '.venv'
-    const uvTag = v.isUv ? ' uv' : ''
-    return `(${venvName}${uvTag}) · ${rel}`
-  }
-
-  function showVenvMenu(e: MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    lspCtxMenu = null
-    const target = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    venvMenu = { x: target.left, bottom: window.innerHeight - target.top + 2 }
-  }
-
-  async function pickVenv(pythonPath: string) {
-    venvMenu = null
-    stores.pythonCmd.set(pythonPath)
-  }
-
-  function lspMenuFocus(node: HTMLElement) {
-    requestAnimationFrame(() => node.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
-    return {}
-  }
-
-  function showLspMenu(e: MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    const target = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    lspCtxMenu = {
-      x: target.left,
-      bottom: window.innerHeight - target.top + 2,
-      right: window.innerWidth - target.right,
-    }
-  }
-
-  async function selectLsp(lspId: string) {
-    if (lspId === _activeLsp) {
-      closeLspCtxMenu()
-      return
-    }
-
-    // Check availability before switching
-    const { available } = await invoke('check_lsp_available', { lspId })
-    if (!available) {
-      // Show toaster confirmation instead of blocking dialog
-      closeLspCtxMenu()
-      _installPending = lspId
-      return
-    }
-
-    // Switch LSP — +page.svelte watches activeLsp and handles the restart
-    stores.activeLsp.set(lspId)
+async function selectLsp(lspId: string) {
+  if (lspId === _activeLsp) {
     closeLspCtxMenu()
+    return
   }
 
-  async function confirmInstall() {
-    const lspId = _installPending
-    if (!lspId) return
-    _installPending = null
-    _installing = true
-    try {
-      const response = await invoke('install_ty')
-      if (!response.success) {
-        showToast?.(`Failed to install ${lspId}: ${response.message}`, 5000)
-        return
-      }
-      stores.activeLsp.set(lspId)
-    } catch (e: any) {
-      showToast?.(`Failed to install ${lspId}: ${e?.message ?? e}`, 5000)
-    } finally {
-      _installing = false
+  // Check availability before switching
+  const { available } = await invoke('check_lsp_available', { lspId })
+  if (!available) {
+    // Show toaster confirmation instead of blocking dialog
+    closeLspCtxMenu()
+    _installPending = lspId
+    return
+  }
+
+  // Switch LSP — +page.svelte watches activeLsp and handles the restart
+  stores.activeLsp.set(lspId)
+  closeLspCtxMenu()
+}
+
+async function confirmInstall() {
+  const lspId = _installPending
+  if (!lspId) return
+  _installPending = null
+  _installing = true
+  try {
+    const response = await invoke('install_ty')
+    if (!response.success) {
+      showToast?.(`Failed to install ${lspId}: ${response.message}`, 5000, 'error')
+      return
     }
+    stores.activeLsp.set(lspId)
+  } catch (e: any) {
+    showToast?.(`Failed to install ${lspId}: ${e?.message ?? e}`, 5000, 'error')
+  } finally {
+    _installing = false
   }
+}
 
-  function cancelInstall() { _installPending = null }
+function cancelInstall() {
+  _installPending = null
+}
 </script>
 
 <div class="statusbar">
   <div class="left">
     {#if _venvMap.length > 1}
       <button class="item python-cmd clickable" onclick={showVenvMenu} title={_pythonCmd}>
-        {pythonLabel(_pythonCmd)} <span class="venv-caret">▾</span>
+        {activePythonLabel(_pythonCmd, _venvMap, _projectRoot)} <span class="venv-caret">▾</span>
       </button>
     {:else}
       <button class="item python-cmd clickable" onclick={selectPython} title={_pythonCmd}>
-        {pythonLabel(_pythonCmd)}
+        {activePythonLabel(_pythonCmd, _venvMap, _projectRoot)}
       </button>
     {/if}
   </div>

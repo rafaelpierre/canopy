@@ -1,46 +1,57 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte'
-  import { tick } from 'svelte'
+import type { Snippet } from 'svelte'
+import { tick } from 'svelte'
 
-  interface Props {
-    open:     boolean
-    onClose:  () => void
-    width?:   string
-    children: Snippet
+interface Props {
+  open: boolean
+  onClose: () => void
+  width?: string
+  children: Snippet
+}
+let { open, onClose, width = '460px', children }: Props = $props()
+
+let boxEl: HTMLElement | undefined = $state(undefined)
+let previousFocus: HTMLElement | null = null
+
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+
+$effect(() => {
+  if (open) {
+    previousFocus = document.activeElement as HTMLElement | null
+    tick().then(() => {
+      const first = boxEl?.querySelector<HTMLElement>(FOCUSABLE)
+      ;(first ?? boxEl)?.focus()
+    })
+  } else {
+    previousFocus?.focus()
+    previousFocus = null
   }
-  let { open, onClose, width = '460px', children }: Props = $props()
+})
 
-  let boxEl: HTMLElement | undefined = $state(undefined)
-  let previousFocus: HTMLElement | null = null
-
-  const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
-
-  $effect(() => {
-    if (open) {
-      previousFocus = document.activeElement as HTMLElement | null
-      tick().then(() => {
-        const first = boxEl?.querySelector<HTMLElement>(FOCUSABLE)
-        ;(first ?? boxEl)?.focus()
-      })
-    } else {
-      previousFocus?.focus()
-      previousFocus = null
+function trapFocus(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    onClose()
+    return
+  }
+  if (e.key !== 'Tab' || !boxEl) return
+  const focusable = Array.from(boxEl.querySelectorAll<HTMLElement>(FOCUSABLE))
+  if (!focusable.length) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (e.shiftKey) {
+    if (document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
     }
-  })
-
-  function trapFocus(e: KeyboardEvent) {
-    if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
-    if (e.key !== 'Tab' || !boxEl) return
-    const focusable = Array.from(boxEl.querySelectorAll<HTMLElement>(FOCUSABLE))
-    if (!focusable.length) return
-    const first = focusable[0]
-    const last  = focusable[focusable.length - 1]
-    if (e.shiftKey) {
-      if (document.activeElement === first) { e.preventDefault(); last.focus() }
-    } else {
-      if (document.activeElement === last) { e.preventDefault(); first.focus() }
+  } else {
+    if (document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
     }
   }
+}
 </script>
 
 {#if open}

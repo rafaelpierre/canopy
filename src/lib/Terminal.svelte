@@ -1,281 +1,355 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte'
-  import { get } from 'svelte/store'
-  import { Terminal }           from '@xterm/xterm'
-  import { FitAddon }           from '@xterm/addon-fit'
-  import '@xterm/xterm/css/xterm.css'
-  import { menuFocus, handleMenuKeydown } from './menu-utils'
+import { FitAddon } from '@xterm/addon-fit'
+import { Terminal } from '@xterm/xterm'
+import { onDestroy, onMount, tick } from 'svelte'
+import { get } from 'svelte/store'
+import '@xterm/xterm/css/xterm.css'
+import { handleMenuKeydown, menuFocus } from './menu-utils'
 
-  let containerEl: HTMLDivElement
-  let invoke:    any
-  let storesMod: any
-  let cachedPrefs: Record<string, any> = {}
-  let cleanups: Array<() => void> = []
+let containerEl: HTMLDivElement
+let invoke: any
+let storesMod: any
+let cachedPrefs: Record<string, any> = {}
+let cleanups: Array<() => void> = []
 
-  interface TermInstance {
-    id:      number
-    term:    Terminal
-    fit:     FitAddon
-    spawned: boolean
-  }
+interface TermInstance {
+  id: number
+  term: Terminal
+  fit: FitAddon
+  spawned: boolean
+}
 
-  interface TermTab {
-    id:         number     // same as main.id — used as key in DOM
-    title:      string
-    main:       TermInstance
-    split?:     TermInstance
-    activeSide: 'main' | 'split'
-  }
+interface TermTab {
+  id: number // same as main.id — used as key in DOM
+  title: string
+  main: TermInstance
+  split?: TermInstance
+  activeSide: 'main' | 'split'
+}
 
-  let tabs:      TermTab[] = $state([])
-  let activeTab  = $state(-1)
-  let nextId     = 0
+let tabs: TermTab[] = $state([])
+let activeTab = $state(-1)
+let nextId = 0
 
-  // O(1) PTY dispatch maps — updated in addTab/splitTab/killTab/closeSplit
-  const instanceById = new Map<number, TermInstance>()
-  const tabByMainId  = new Map<number, TermTab>()
+// O(1) PTY dispatch maps — updated in addTab/splitTab/killTab/closeSplit
+const instanceById = new Map<number, TermInstance>()
+const tabByMainId = new Map<number, TermTab>()
 
-  // Terminal tab context menu
-  let termCtxMenu: { x: number; y: number; id: number } | null = $state(null)
+// Terminal tab context menu
+let termCtxMenu: { x: number; y: number; id: number } | null = $state(null)
 
-  // Shell picker popover
-  let showShellPicker = $state(false)
-  let availableShells: string[] = $state([])
-  let preferredShell  = $state('')
+// Shell picker popover
+let showShellPicker = $state(false)
+let availableShells: string[] = $state([])
+let preferredShell = $state('')
 
-  function shellBasename(p: string): string {
-    return p ? (p.split('/').pop() ?? p) : ''
-  }
+function shellBasename(p: string): string {
+  return p ? (p.split('/').pop() ?? p) : ''
+}
 
-  // Parse OSC 7 (current directory notification) from raw PTY bytes.
-  function parseOsc7(bytes: Uint8Array): string | null {
+// Parse OSC 7 (current directory notification) from raw PTY bytes.
+function parseOsc7(bytes: Uint8Array): string | null {
+  try {
+    const str = new TextDecoder().decode(bytes)
+    const m = str.match(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]+)(?:\x07|\x1b\\)/)
+    if (!m) return null
     try {
-      const str = new TextDecoder().decode(bytes)
-      const m = str.match(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]+)(?:\x07|\x1b\\)/)
-      if (!m) return null
-      try { return decodeURIComponent(m[1]) } catch { return m[1] }
-    } catch { return null }
-  }
-
-  function makeTitle(root: string | null): string {
-    const sh = shellBasename(preferredShell)
-    const dir = root ? (root.split('/').pop() ?? root) : ''
-    if (sh && dir) return `${sh}: ${dir}`
-    if (sh) return sh
-    if (dir) return dir
-    return 'shell'
-  }
-
-  function createXterm(): Terminal {
-    return new Terminal({
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      scrollback: 5000,
-      theme: {
-        background: '#181818', foreground: '#d4d4d4',
-        cursor: '#528bff', cursorAccent: '#1c1c1c',
-        selectionBackground: 'rgba(61,79,111,0.5)',
-        black: '#1c1c1c', red: '#e06c75', green: '#98c379',
-        yellow: '#e5c07b', blue: '#61afef', magenta: '#c678dd',
-        cyan: '#56b6c2', white: '#d4d4d4', brightBlack: '#5c6370',
-      },
-      convertEol: false,
-    })
-  }
-
-  function buildInstance(id: number): TermInstance {
-    const term = createXterm()
-    const fit  = new FitAddon()
-    term.loadAddon(fit)
-    return { id, term, fit, spawned: false }
-  }
-
-  function openInstanceInEl(inst: TermInstance, el: HTMLElement) {
-    inst.term.open(el)
-    inst.fit.fit()
-    inst.term.onData((data: string) => {
-      if (inst.spawned && invoke) invoke('pty_write', { id: inst.id, data }).catch(console.error)
-    })
-    inst.term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
-      if (inst.spawned && invoke) invoke('pty_resize', { id: inst.id, cols, rows }).catch(() => {})
-    })
-  }
-
-  async function spawnInstance(inst: TermInstance, cwd: string | null) {
-    try {
-      await invoke('pty_spawn', { id: inst.id, cwd, cols: inst.term.cols, rows: inst.term.rows })
-      inst.spawned = true
-    } catch (e: any) {
-      inst.term.writeln(`\r\n\x1b[38;5;203m${e}\x1b[0m`)
+      return decodeURIComponent(m[1])
+    } catch {
+      return m[1]
     }
+  } catch {
+    return null
   }
+}
 
+function makeTitle(root: string | null): string {
+  const sh = shellBasename(preferredShell)
+  const dir = root ? (root.split('/').pop() ?? root) : ''
+  if (sh && dir) return `${sh}: ${dir}`
+  if (sh) return sh
+  if (dir) return dir
+  return 'shell'
+}
 
-  function onTabsKeydown(e: KeyboardEvent) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-    const idx = tabs.findIndex(t => t.id === activeTab)
-    if (idx === -1) return
-    e.preventDefault()
-    const nextIdx = e.key === 'ArrowRight'
-      ? Math.min(idx + 1, tabs.length - 1)
-      : Math.max(idx - 1, 0)
-    switchToTab(tabs[nextIdx].id)
-    tick().then(() => {
-      (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus()
-    })
+function createXterm(): Terminal {
+  return new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    scrollback: 5000,
+    theme: {
+      background: '#181818',
+      foreground: '#d4d4d4',
+      cursor: '#528bff',
+      cursorAccent: '#1c1c1c',
+      selectionBackground: 'rgba(61,79,111,0.5)',
+      black: '#1c1c1c',
+      red: '#e06c75',
+      green: '#98c379',
+      yellow: '#e5c07b',
+      blue: '#61afef',
+      magenta: '#c678dd',
+      cyan: '#56b6c2',
+      white: '#d4d4d4',
+      brightBlack: '#5c6370',
+    },
+    convertEol: false,
+  })
+}
+
+function buildInstance(id: number): TermInstance {
+  const term = createXterm()
+  const fit = new FitAddon()
+  term.loadAddon(fit)
+  return { id, term, fit, spawned: false }
+}
+
+function openInstanceInEl(inst: TermInstance, el: HTMLElement) {
+  inst.term.open(el)
+  inst.fit.fit()
+  inst.term.onData((data: string) => {
+    if (inst.spawned && invoke) invoke('pty_write', { id: inst.id, data }).catch(console.error)
+  })
+  inst.term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
+    if (inst.spawned && invoke) invoke('pty_resize', { id: inst.id, cols, rows }).catch(() => {})
+  })
+}
+
+async function spawnInstance(inst: TermInstance, cwd: string | null) {
+  try {
+    await invoke('pty_spawn', { id: inst.id, cwd, cols: inst.term.cols, rows: inst.term.rows })
+    inst.spawned = true
+  } catch (e: any) {
+    inst.term.writeln(`\r\n\x1b[38;5;203m${e}\x1b[0m`)
   }
+}
 
-  function onTermTabContextMenu(e: MouseEvent, id: number) {
-    e.preventDefault()
-    e.stopPropagation()
-    termCtxMenu = { x: e.clientX, y: e.clientY, id }
+function onTabsKeydown(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  const idx = tabs.findIndex((t) => t.id === activeTab)
+  if (idx === -1) return
+  e.preventDefault()
+  const nextIdx = e.key === 'ArrowRight' ? Math.min(idx + 1, tabs.length - 1) : Math.max(idx - 1, 0)
+  switchToTab(tabs[nextIdx].id)
+  tick().then(() => {
+    ;(e.currentTarget as HTMLElement)
+      .querySelector<HTMLElement>('[role="tab"][tabindex="0"]')
+      ?.focus()
+  })
+}
+
+function onTermTabContextMenu(e: MouseEvent, id: number) {
+  e.preventDefault()
+  e.stopPropagation()
+  termCtxMenu = { x: e.clientX, y: e.clientY, id }
+}
+
+function closeOtherTermTabs(id: number) {
+  for (const tab of tabs) {
+    if (tab.id !== id) killTab(tab)
   }
+  tabs = tabs.filter((t) => t.id === id)
+  activeTab = id
+  requestAnimationFrame(() => refitTab(tabs.find((t) => t.id === id)))
+}
 
-  function closeOtherTermTabs(id: number) {
-    for (const tab of tabs) {
-      if (tab.id !== id) killTab(tab)
-    }
-    tabs = tabs.filter(t => t.id === id)
-    activeTab = id
-    requestAnimationFrame(() => refitTab(tabs.find(t => t.id === id)))
+function killTab(tab: TermTab) {
+  instanceById.delete(tab.main.id)
+  tabByMainId.delete(tab.main.id)
+  tab.main.spawned = false
+  tab.main.term.dispose()
+  invoke?.('pty_kill', { id: tab.main.id }).catch(() => {})
+  if (tab.split) {
+    instanceById.delete(tab.split.id)
+    tab.split.spawned = false
+    tab.split.term.dispose()
+    invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
   }
+}
 
-  function killTab(tab: TermTab) {
-    instanceById.delete(tab.main.id)
-    tabByMainId.delete(tab.main.id)
-    tab.main.spawned = false
-    tab.main.term.dispose()
-    invoke?.('pty_kill', { id: tab.main.id }).catch(() => {})
-    if (tab.split) {
-      instanceById.delete(tab.split.id)
-      tab.split.spawned = false
-      tab.split.term.dispose()
-      invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
-    }
-  }
+function refitTab(tab: TermTab | undefined) {
+  if (!tab) return
+  tab.main.fit.fit()
+  tab.split?.fit.fit()
+}
 
-  function refitTab(tab: TermTab | undefined) {
-    if (!tab) return
+export async function addTab() {
+  const id = nextId++
+  const inst = buildInstance(id)
+  const tab: TermTab = { id, title: 'shell', main: inst, activeSide: 'main' }
+  instanceById.set(inst.id, inst)
+  tabByMainId.set(inst.id, tab)
+  tabs = [...tabs, tab]
+  activeTab = id
+
+  await new Promise((r) => requestAnimationFrame(r))
+  const el = containerEl?.querySelector(`[data-tab-id="${id}"]`) as HTMLElement | null
+  if (el) openInstanceInEl(inst, el)
+
+  const root = storesMod ? (get(storesMod.projectRoot) as string | null) : null
+  tab.title = makeTitle(root)
+  tabs = [...tabs]
+
+  await spawnInstance(inst, root)
+}
+
+async function splitTab(tabId: number) {
+  const tab = tabs.find((t) => t.id === tabId)
+  if (!tab || tab.split) return
+
+  const splitId = nextId++
+  const inst = buildInstance(splitId)
+  instanceById.set(inst.id, inst)
+
+  // Assign temporarily to trigger DOM element render
+  tab.split = inst
+  tabs = [...tabs]
+
+  await new Promise((r) => requestAnimationFrame(r))
+  const el = containerEl?.querySelector(`[data-split-id="${tabId}"]`) as HTMLElement | null
+  if (el) openInstanceInEl(inst, el)
+  tab.activeSide = 'split'
+  tabs = [...tabs]
+  // Refit both sides after layout change
+  requestAnimationFrame(() => refitTab(tab))
+
+  const root = storesMod ? (get(storesMod.projectRoot) as string | null) : null
+  await spawnInstance(inst, root)
+}
+
+function closeSplit(tabId: number) {
+  const tab = tabs.find((t) => t.id === tabId)
+  if (!tab?.split) return
+  instanceById.delete(tab.split.id)
+  tab.split.spawned = false
+  tab.split.term.dispose()
+  invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
+  tab.split = undefined
+  tab.activeSide = 'main'
+  tabs = [...tabs]
+  requestAnimationFrame(() => {
     tab.main.fit.fit()
-    tab.split?.fit.fit()
-  }
+  })
+}
 
-  export async function addTab() {
-    const id   = nextId++
+function switchToTab(id: number) {
+  activeTab = id
+  requestAnimationFrame(() => refitTab(tabs.find((t) => t.id === id)))
+}
+
+// Snapshot the cwd of every tab (and split if any) — used by +page.svelte
+// to persist terminal state per project. Queries the live shell PIDs so any
+// `cd` the user has typed since spawn is captured.
+export async function getSessionState(): Promise<
+  Array<{ cwd: string | null; split_cwd?: string | null }>
+> {
+  if (!invoke) return []
+  const out: Array<{ cwd: string | null; split_cwd?: string | null }> = []
+  for (const tab of tabs) {
+    const mainCwd = await invoke('pty_cwd', { id: tab.main.id }).catch(() => null)
+    const splitCwd = tab.split
+      ? await invoke('pty_cwd', { id: tab.split.id }).catch(() => null)
+      : null
+    out.push({ cwd: mainCwd, split_cwd: splitCwd })
+  }
+  return out
+}
+
+// Restore tabs from a saved snapshot. Replaces any current tabs (called only
+// during project switch / first mount, when the state is fresh anyway).
+export async function restoreSession(
+  snapshots: Array<{ cwd: string | null; split_cwd?: string | null }>,
+) {
+  if (!snapshots?.length) return
+  // Tear down any existing tabs first
+  for (const tab of [...tabs]) closeTab(tab.id)
+  for (const snap of snapshots) {
+    const id = nextId++
     const inst = buildInstance(id)
     const tab: TermTab = { id, title: 'shell', main: inst, activeSide: 'main' }
     instanceById.set(inst.id, inst)
     tabByMainId.set(inst.id, tab)
     tabs = [...tabs, tab]
     activeTab = id
-
-    await new Promise(r => requestAnimationFrame(r))
+    await new Promise((r) => requestAnimationFrame(r))
     const el = containerEl?.querySelector(`[data-tab-id="${id}"]`) as HTMLElement | null
     if (el) openInstanceInEl(inst, el)
-
-    const root = storesMod ? get(storesMod.projectRoot) as string | null : null
-    tab.title = makeTitle(root)
+    tab.title = makeTitle(snap.cwd)
     tabs = [...tabs]
-
-    await spawnInstance(inst, root)
-  }
-
-  async function splitTab(tabId: number) {
-    const tab = tabs.find(t => t.id === tabId)
-    if (!tab || tab.split) return
-
-    const splitId = nextId++
-    const inst    = buildInstance(splitId)
-    instanceById.set(inst.id, inst)
-
-    // Assign temporarily to trigger DOM element render
-    tab.split = inst
-    tabs = [...tabs]
-
-    await new Promise(r => requestAnimationFrame(r))
-    const el = containerEl?.querySelector(`[data-split-id="${tabId}"]`) as HTMLElement | null
-    if (el) openInstanceInEl(inst, el)
-    tab.activeSide = 'split'
-    tabs = [...tabs]
-    // Refit both sides after layout change
-    requestAnimationFrame(() => refitTab(tab))
-
-    const root = storesMod ? get(storesMod.projectRoot) as string | null : null
-    await spawnInstance(inst, root)
-  }
-
-  function closeSplit(tabId: number) {
-    const tab = tabs.find(t => t.id === tabId)
-    if (!tab?.split) return
-    instanceById.delete(tab.split.id)
-    tab.split.spawned = false
-    tab.split.term.dispose()
-    invoke?.('pty_kill', { id: tab.split.id }).catch(() => {})
-    tab.split = undefined
-    tab.activeSide = 'main'
-    tabs = [...tabs]
-    requestAnimationFrame(() => { tab.main.fit.fit() })
-  }
-
-  function switchToTab(id: number) {
-    activeTab = id
-    requestAnimationFrame(() => refitTab(tabs.find(t => t.id === id)))
-  }
-
-  function closeTab(id: number, e?: MouseEvent) {
-    e?.stopPropagation()
-    const idx = tabs.findIndex(t => t.id === id)
-    if (idx < 0) return
-    killTab(tabs[idx])
-    tabs = tabs.filter(t => t.id !== id)
-    if (activeTab === id && tabs.length > 0) {
-      activeTab = tabs[Math.max(0, idx - 1)].id
-      requestAnimationFrame(() => refitTab(tabs.find(t => t.id === activeTab)))
+    await spawnInstance(inst, snap.cwd)
+    if (snap.split_cwd) {
+      const splitId = nextId++
+      const splitInst = buildInstance(splitId)
+      instanceById.set(splitInst.id, splitInst)
+      tab.split = splitInst
+      tabs = [...tabs]
+      await new Promise((r) => requestAnimationFrame(r))
+      const splitEl = containerEl?.querySelector(`[data-split-id="${id}"]`) as HTMLElement | null
+      if (splitEl) openInstanceInEl(splitInst, splitEl)
+      await spawnInstance(splitInst, snap.split_cwd)
     }
   }
+}
 
-  function closeTermCtxMenu() { termCtxMenu = null; showShellPicker = false }
-
-  async function openShellPicker(e: MouseEvent) {
-    e.stopPropagation()
-    if (!availableShells.length) {
-      try { availableShells = await invoke('list_shells') } catch { availableShells = [] }
-    }
-    showShellPicker = !showShellPicker
+function closeTab(id: number, e?: MouseEvent) {
+  e?.stopPropagation()
+  const idx = tabs.findIndex((t) => t.id === id)
+  if (idx < 0) return
+  killTab(tabs[idx])
+  tabs = tabs.filter((t) => t.id !== id)
+  if (activeTab === id && tabs.length > 0) {
+    activeTab = tabs[Math.max(0, idx - 1)].id
+    requestAnimationFrame(() => refitTab(tabs.find((t) => t.id === activeTab)))
   }
+}
 
-  async function selectShell(shell: string) {
-    preferredShell = shell
-    showShellPicker = false
-    // Update all current tab titles
-    for (const tab of tabs) {
-      const currentDir = tab.title.split(': ')[1] ?? ''
-      tab.title = shell ? `${shellBasename(shell)}: ${currentDir || 'shell'}` : (currentDir || 'shell')
-    }
-    tabs = [...tabs]
-    cachedPrefs = { ...cachedPrefs, preferred_shell: shell }
-    await invoke('save_prefs', { prefs: cachedPrefs }).catch(() => {})
-  }
+function closeTermCtxMenu() {
+  termCtxMenu = null
+  showShellPicker = false
+}
 
-  onMount(async () => {
-    window.addEventListener('click', closeTermCtxMenu)
-
-    const [ipcMod, _storesMod] = await Promise.all([
-      import('$lib/ipc'),
-      import('./stores'),
-    ])
-    invoke    = ipcMod.invoke
-    storesMod = _storesMod
-
-    // Load preferred shell from prefs
+async function openShellPicker(e: MouseEvent) {
+  e.stopPropagation()
+  if (!availableShells.length) {
     try {
-      cachedPrefs = await invoke('load_prefs')
-      if (cachedPrefs.preferred_shell) preferredShell = cachedPrefs.preferred_shell
-    } catch {}
+      availableShells = await invoke('list_shells')
+    } catch {
+      availableShells = []
+    }
+  }
+  showShellPicker = !showShellPicker
+}
 
-    // PTY data → correct terminal instance via O(1) map lookup
-    ipcMod.listen('pty:data', (e: any) => {
+async function selectShell(shell: string) {
+  preferredShell = shell
+  showShellPicker = false
+  // Update all current tab titles
+  for (const tab of tabs) {
+    const currentDir = tab.title.split(': ')[1] ?? ''
+    tab.title = shell ? `${shellBasename(shell)}: ${currentDir || 'shell'}` : currentDir || 'shell'
+  }
+  tabs = [...tabs]
+  cachedPrefs = { ...cachedPrefs, preferred_shell: shell }
+  await invoke('save_prefs', { prefs: cachedPrefs }).catch(() => {})
+}
+
+onMount(async () => {
+  window.addEventListener('click', closeTermCtxMenu)
+
+  const [ipcMod, _storesMod] = await Promise.all([import('$lib/ipc'), import('./stores')])
+  invoke = ipcMod.invoke
+  storesMod = _storesMod
+
+  // Load preferred shell from prefs
+  try {
+    cachedPrefs = await invoke('load_prefs')
+    if (cachedPrefs.preferred_shell) preferredShell = cachedPrefs.preferred_shell
+  } catch {}
+
+  // PTY data → correct terminal instance via O(1) map lookup
+  ipcMod
+    .listen('pty:data', (e: any) => {
       const { id, data } = e.payload as { id: number; data: Uint8Array }
       const inst = instanceById.get(id)
       if (!inst) return
@@ -285,13 +359,17 @@
         const cwd = parseOsc7(data)
         if (cwd) {
           const cwdName = (cwd.split('/').pop() || cwd).replace(/[^\x20-\x7E -￿]/g, '')
-          mainTab.title = shellBasename(preferredShell) ? `${shellBasename(preferredShell)}: ${cwdName}` : cwdName
+          mainTab.title = shellBasename(preferredShell)
+            ? `${shellBasename(preferredShell)}: ${cwdName}`
+            : cwdName
           tabs = [...tabs]
         }
       }
-    }).then((u: any) => cleanups.push(u))
+    })
+    .then((u: any) => cleanups.push(u))
 
-    ipcMod.listen('pty:exit', (e: any) => {
+  ipcMod
+    .listen('pty:exit', (e: any) => {
       const { id } = e.payload as { id: number }
       for (const tab of tabs) {
         if (tab.main.id === id) {
@@ -305,46 +383,84 @@
           return
         }
       }
-    }).then((u: any) => cleanups.push(u))
-
-    // Resize observer — refit active terminal(s) when container resizes
-    let _resizeTimer: ReturnType<typeof setTimeout> | null = null
-    const ro = new ResizeObserver(() => {
-      const t = tabs.find(t => t.id === activeTab)
-      if (!t) return
-      if (_resizeTimer) clearTimeout(_resizeTimer)
-      _resizeTimer = setTimeout(() => {
-        _resizeTimer = null
-        t.main.fit.fit()
-        t.split?.fit.fit()
-        if (t.main.spawned) invoke('pty_resize', { id: t.main.id, cols: t.main.term.cols, rows: t.main.term.rows }).catch(() => {})
-        if (t.split?.spawned) invoke('pty_resize', { id: t.split.id, cols: t.split.term.cols, rows: t.split.term.rows }).catch(() => {})
-      }, 50)
     })
-    ro.observe(containerEl)
-    cleanups.push(() => ro.disconnect())
+    .then((u: any) => cleanups.push(u))
 
-    // Font size zoom
-    cleanups.push(storesMod.termFontSize.subscribe((size: number) => {
+  // Resize observer — refit active terminal(s) when container resizes
+  let _resizeTimer: ReturnType<typeof setTimeout> | null = null
+  const ro = new ResizeObserver(() => {
+    const t = tabs.find((t) => t.id === activeTab)
+    if (!t) return
+    if (_resizeTimer) clearTimeout(_resizeTimer)
+    _resizeTimer = setTimeout(() => {
+      _resizeTimer = null
+      t.main.fit.fit()
+      t.split?.fit.fit()
+      if (t.main.spawned)
+        invoke('pty_resize', {
+          id: t.main.id,
+          cols: t.main.term.cols,
+          rows: t.main.term.rows,
+        }).catch(() => {})
+      if (t.split?.spawned)
+        invoke('pty_resize', {
+          id: t.split.id,
+          cols: t.split.term.cols,
+          rows: t.split.term.rows,
+        }).catch(() => {})
+    }, 50)
+  })
+  ro.observe(containerEl)
+  cleanups.push(() => ro.disconnect())
+
+  // Font size zoom
+  cleanups.push(
+    storesMod.termFontSize.subscribe((size: number) => {
       for (const tab of tabs) {
         tab.main.term.options.fontSize = size
         if (tab.split) tab.split.term.options.fontSize = size
-        if (tab.id === activeTab) { tab.main.fit.fit(); tab.split?.fit.fit() }
+        if (tab.id === activeTab) {
+          tab.main.fit.fit()
+          tab.split?.fit.fit()
+        }
       }
-    }))
+    }),
+  )
 
-    await new Promise(r => setTimeout(r, 300))
-    await addTab()
+  // Wait for the project to be fully restored (projectRoot set + prefs loaded
+  // → projectSessions populated) before deciding restore vs default. Using a
+  // 300ms timer here was racy: prefs load + initLsp can finish after that
+  // window, in which case we'd read empty stores and spawn a default tab.
+  let didInitialSpawn = false
+  cleanups.push(
+    storesMod.projectRoot.subscribe((root: string | null) => {
+      if (didInitialSpawn || !root) return
+      didInitialSpawn = true
+      // Microtask delay so projectSessions is set in the same synchronous batch
+      // as projectRoot during +page's project-restore (both run from initLsp).
+      queueMicrotask(async () => {
+        const sessions = get(storesMod.projectSessions) as Record<string, any>
+        const saved = sessions[root]?.terminal_tabs as
+          | Array<{ cwd: string | null; split_cwd?: string | null }>
+          | undefined
+        if (saved?.length) await restoreSession(saved)
+        else await addTab()
+      })
+    }),
+  )
 
-    // cd when project root changes after initial spawn
-    let lastRoot: string | null = null
-    cleanups.push(storesMod.projectRoot.subscribe((root: string | null) => {
+  // cd when project root changes after initial spawn
+  let lastRoot: string | null = null
+  cleanups.push(
+    storesMod.projectRoot.subscribe((root: string | null) => {
       if (root && root !== lastRoot) {
         lastRoot = root
-        const activeTermTab = tabs.find(t => t.id === activeTab)
+        const activeTermTab = tabs.find((t) => t.id === activeTab)
         if (activeTermTab?.main.spawned) {
           const safeRoot = "'" + root.replace(/'/g, "'\\''") + "'"
-          invoke('pty_write', { id: activeTermTab.main.id, data: `cd ${safeRoot}\nclear\n` }).catch(() => {})
+          invoke('pty_write', { id: activeTermTab.main.id, data: `cd ${safeRoot}\nclear\n` }).catch(
+            () => {},
+          )
         }
         // Update all tab titles with new root
         for (const tab of tabs) {
@@ -354,21 +470,22 @@
         }
         tabs = [...tabs]
       }
-    }))
-  })
+    }),
+  )
+})
 
-  onDestroy(() => {
-    window.removeEventListener('click', closeTermCtxMenu)
-    for (const c of cleanups) c()
-    for (const tab of tabs) killTab(tab)
-    invoke?.('pty_kill', { id: 'all' }).catch(() => {})
-  })
+onDestroy(() => {
+  window.removeEventListener('click', closeTermCtxMenu)
+  for (const c of cleanups) c()
+  for (const tab of tabs) killTab(tab)
+  invoke?.('pty_kill', { id: 'all' }).catch(() => {})
+})
 
-  // Public API (accessible via bind:this)
-  export function splitActiveTab() {
-    const t = tabs.find(t => t.id === activeTab)
-    if (t) splitTab(t.id)
-  }
+// Public API (accessible via bind:this)
+export function splitActiveTab() {
+  const t = tabs.find((t) => t.id === activeTab)
+  if (t) splitTab(t.id)
+}
 </script>
 
 {#if termCtxMenu}

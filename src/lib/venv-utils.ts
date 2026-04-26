@@ -1,17 +1,27 @@
+import { isUnder } from '$lib/path'
 import type { VenvInfo } from '$lib/stores'
 
 // Cross-session cache of discovered venv-per-file results. Mtime of the venv's
 // owning directory is stored so we can invalidate when the .venv is removed.
 export const VENV_CACHE_KEY = 'canopy:venv_cache_v3'
 
-export interface VenvCacheEntry { mtime: number; venv: VenvInfo | null }
+export interface VenvCacheEntry {
+  mtime: number
+  venv: VenvInfo | null
+}
 
 export function loadVenvCache(): Record<string, VenvCacheEntry> {
-  try { return JSON.parse(localStorage.getItem(VENV_CACHE_KEY) ?? '{}') } catch { return {} }
+  try {
+    return JSON.parse(localStorage.getItem(VENV_CACHE_KEY) ?? '{}')
+  } catch {
+    return {}
+  }
 }
 
 export function saveVenvCache(cache: Record<string, VenvCacheEntry>) {
-  try { localStorage.setItem(VENV_CACHE_KEY, JSON.stringify(cache)) } catch {}
+  try {
+    localStorage.setItem(VENV_CACHE_KEY, JSON.stringify(cache))
+  } catch {}
 }
 
 export function findClosestVenv(filePath: string, venvList: VenvInfo[]): VenvInfo | null {
@@ -20,7 +30,7 @@ export function findClosestVenv(filePath: string, venvList: VenvInfo[]): VenvInf
   let best: VenvInfo | null = null
   let bestLen = -1
   for (const v of venvList) {
-    if ((dir + '/').startsWith(v.subdir + '/') || dir === v.subdir) {
+    if (isUnder(dir, v.subdir)) {
       if (v.subdir.length > bestLen) {
         bestLen = v.subdir.length
         best = v
@@ -50,12 +60,12 @@ export interface VenvManagerDeps {
  */
 export function createVenvManager(deps: VenvManagerDeps) {
   const { invoke, get, stores } = deps
-  const searched = new Map<string, VenvInfo | null>()  // dir → result (in-session memo)
+  const searched = new Map<string, VenvInfo | null>() // dir → result (in-session memo)
   let busyCount = 0
 
   function applyVenvToMap(venv: VenvInfo) {
     const current = get(stores.venvMap) as VenvInfo[]
-    if (current.some(v => v.pythonPath === venv.pythonPath)) return
+    if (current.some((v) => v.pythonPath === venv.pythonPath)) return
     stores.venvMap.set([...current, venv])
   }
 
@@ -97,7 +107,7 @@ export function createVenvManager(deps: VenvManagerDeps) {
 
     if (++busyCount === 1) stores.venvScanning.set(true)
     try {
-      const venv = await invoke('find_ancestor_venv', { filePath }) as VenvInfo | null
+      const venv = (await invoke('find_ancestor_venv', { filePath })) as VenvInfo | null
       searched.set(dir, venv)
 
       // Persist for next session, keyed by file's dir
@@ -105,7 +115,21 @@ export function createVenvManager(deps: VenvManagerDeps) {
       cache[root + ':' + dir] = { mtime: Date.now(), venv }
       saveVenvCache(cache)
 
-      if (venv) applyAndSwitch(venv)
+      if (venv) {
+        applyAndSwitch(venv)
+      } else {
+        // No ancestor venv exists. If pythonCmd was previously pointing at a venv
+        // that's now gone (user deleted it), drop back to system python — otherwise
+        // the LSP will keep failing to start with a non-existent interpreter. Also
+        // prune any matching venvMap entry so the picker doesn't show a ghost.
+        const current = get(stores.pythonCmd) as string
+        if (current && current !== 'python3' && current.includes('/')) {
+          const venvs = get(stores.venvMap) as VenvInfo[]
+          const pruned = venvs.filter((v) => v.pythonPath !== current)
+          if (pruned.length !== venvs.length) stores.venvMap.set(pruned)
+          stores.pythonCmd.set('python3')
+        }
+      }
     } catch (e) {
       console.warn('[Canopy] findVenvForFile:', e)
     } finally {
@@ -119,7 +143,31 @@ export function createVenvManager(deps: VenvManagerDeps) {
     if (current !== venv.pythonPath) stores.pythonCmd.set(venv.pythonPath)
   }
 
-  function clearMemo() { searched.clear() }
+  function clearMemo() {
+    searched.clear()
+  }
 
-  return { findVenvForFile, preloadVenvCache, clearMemo }
+  /**
+   * Drop cached results so the next findVenvForFile call re-walks the tree.
+   * Used after fs changes — both negative memos (a `.venv` may have been
+   * created) AND positive ones (a NEW `.venv` may now shadow a previously-
+   * cached ancestor venv). Cheap: discovery is O(depth) stats per file.
+   */
+  function invalidateAll() {
+    searched.clear()
+    const root = get(stores.projectRoot) as string | null
+    if (!root) return
+    const cache = loadVenvCache()
+    const prefix = root + ':'
+    let dirty = false
+    for (const key of Object.keys(cache)) {
+      if (key.startsWith(prefix)) {
+        delete cache[key]
+        dirty = true
+      }
+    }
+    if (dirty) saveVenvCache(cache)
+  }
+
+  return { findVenvForFile, preloadVenvCache, clearMemo, invalidateAll }
 }
